@@ -1,0 +1,27 @@
+services:
+  backend:
+    image: python:3.12-slim
+    working_dir: /app/backend
+    command: >
+      sh -c "apt-get update &&
+      apt-get install -y --no-install-recommends ffmpeg &&
+      rm -rf /var/lib/apt/lists/* &&
+      pip install --no-cache-dir -r requirements.txt &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app/frontend
+    command: sh -c "npm install && npm run dev -- --hostname 0.0.0.0"
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      - .:/app
+    depends_on:
+      - backend
