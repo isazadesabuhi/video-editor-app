@@ -5,6 +5,7 @@ A full-stack video editing MVP built with Next.js, FastAPI, and FFmpeg.
 ## Features
 
 - Upload videos to the backend
+- Download a YouTube video into the crop workflow
 - Preview videos in the browser
 - Draw and export a custom crop
 - Export a centered 9:16 crop for Reels, Shorts, and TikTok
@@ -58,3 +59,5 @@ Cutting with mode `copy` preserves quality because it uses `-c copy`, but cuts m
 Cropping changes the frame, so it must re-encode. The default crop quality is H.264 CRF 18.
 
 Uploaded and exported videos are stored under `backend/app/storage/` and ignored by git.
+
+Only download videos you own or have permission to download.

@@ -11,6 +11,8 @@ export type JobStatus = {
   output?: string;
   outputs?: string[];
   archive?: string;
+  started_at?: string;
+  finished_at?: string;
 };
 
 export async function uploadVideo(file: File) {
@@ -24,6 +26,18 @@ export async function uploadVideo(file: File) {
   });
 
   return response.data;
+}
+
+export async function downloadYouTubeVideo(payload: {
+  url: string;
+  quality: "720p" | "1080p" | "best";
+}) {
+  const response = await axios.post(`${API_URL}/videos/youtube`, payload);
+  return response.data;
+}
+
+export function getVideoPreviewUrl(videoId: string) {
+  return `${API_URL}/videos/${videoId}/preview`;
 }
 
 export async function cropVideo(payload: {
@@ -54,8 +68,28 @@ export async function cutVideo(payload: {
 }
 
 export async function getJob(jobId: string) {
-  const response = await axios.get(`${API_URL}/jobs/${jobId}`);
+  const response = await axios.get(`${API_URL}/jobs/${jobId}`, {
+    params: {
+      t: Date.now(),
+    },
+    headers: {
+      "Cache-Control": "no-cache",
+    },
+  });
   return response.data;
+}
+
+export function getApiErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail;
+
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) return detail.map(String).join(", ");
+
+    return error.message;
+  }
+
+  return error instanceof Error ? error.message : fallback;
 }
 
 export function getDownloadUrl(jobId: string) {

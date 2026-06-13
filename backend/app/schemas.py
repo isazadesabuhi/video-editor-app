@@ -9,7 +9,14 @@ class CropRequest(BaseModel):
     width: int = Field(gt=0)
     height: int = Field(gt=0)
     quality: Literal["high", "very_high", "lossless"] = "high"
-    preset: Optional[Literal["custom", "reels", "shorts", "tiktok"]] = None
+    preset: Optional[
+        Literal["custom", "reels", "shorts", "tiktok", "vertical_from_crop"]
+    ] = None
+
+
+class YouTubeDownloadRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    quality: Literal["720p", "1080p", "best"] = "1080p"
 
 
 class CutRange(BaseModel):

@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect } from "react";
-import { getDownloadUrl, getJob, type JobStatus } from "@/lib/api";
+import {
+  getApiErrorMessage,
+  getDownloadUrl,
+  getJob,
+  type JobStatus,
+} from "@/lib/api";
 
 type Props = {
   jobs: JobStatus[];
@@ -14,7 +19,7 @@ export default function JobStatusList({ jobs, onJobUpdate }: Props) {
 
     if (activeJobs.length === 0) return;
 
-    const timer = window.setInterval(() => {
+    function pollActiveJobs() {
       activeJobs.forEach(async (job) => {
         try {
           const result = await getJob(job.id);
@@ -29,14 +34,15 @@ export default function JobStatusList({ jobs, onJobUpdate }: Props) {
           onJobUpdate({
             ...job,
             status: "failed",
-            error:
-              error instanceof Error
-                ? error.message
-                : "Could not fetch job status",
+            error: getApiErrorMessage(error, "Could not fetch job status"),
           });
         }
       });
-    }, 1500);
+    }
+
+    pollActiveJobs();
+
+    const timer = window.setInterval(pollActiveJobs, 1500);
 
     return () => window.clearInterval(timer);
   }, [jobs, onJobUpdate]);

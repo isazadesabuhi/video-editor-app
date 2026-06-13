@@ -40,7 +40,16 @@ def get_crf(quality: str) -> str:
 
 def run_command(command: list[str]) -> None:
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=60 * 60,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("FFmpeg timed out before the export finished") from error
     except FileNotFoundError as error:
         raise RuntimeError("FFmpeg is not installed or is not on PATH") from error
     except subprocess.CalledProcessError as error:
@@ -64,6 +73,9 @@ def crop_video(
     width = width if width % 2 == 0 else width - 1
     height = height if height % 2 == 0 else height - 1
 
+    if width <= 0 or height <= 0:
+        raise ValueError("Crop width and height must be at least 2 pixels")
+
     crf = get_crf(quality)
 
     command = [
@@ -72,15 +84,25 @@ def crop_video(
         "-i",
         str(input_path),
         "-vf",
-        f"crop={width}:{height}:{x}:{y}",
+        f"crop={width}:{height}:{x}:{y},setsar=1",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
         "-c:v",
         "libx264",
         "-crf",
         crf,
         "-preset",
-        "slow",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
         "-c:a",
-        "copy",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
         str(output_path),
     ]
 
@@ -107,15 +129,87 @@ def crop_for_vertical_social(
         "-i",
         str(input_path),
         "-vf",
-        "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920",
+        (
+            "crop="
+            "'floor(if(gt(iw/ih,9/16),ih*9/16,iw)/2)*2':"
+            "'floor(if(gt(iw/ih,9/16),ih,iw*16/9)/2)*2':"
+            "(iw-ow)/2:(ih-oh)/2,"
+            "scale=1080:1920,setsar=1"
+        ),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
         "-c:v",
         "libx264",
         "-crf",
         crf,
         "-preset",
-        "slow",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
         "-c:a",
-        "copy",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+
+    run_command(command)
+
+
+def crop_selection_for_vertical_social(
+    input_path: Path,
+    output_path: Path,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    quality: str = "high",
+) -> None:
+    """
+    Crop to the selected region, then fit it into a 1080x1920 vertical canvas.
+    This keeps the chosen crop visible without stretching it.
+    """
+    width = width if width % 2 == 0 else width - 1
+    height = height if height % 2 == 0 else height - 1
+
+    if width <= 0 or height <= 0:
+        raise ValueError("Crop width and height must be at least 2 pixels")
+
+    crf = get_crf(quality)
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vf",
+        (
+            f"crop={width}:{height}:{x}:{y},"
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1"
+        ),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-crf",
+        crf,
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
         str(output_path),
     ]
 
