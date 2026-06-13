@@ -67,6 +67,16 @@ export async function cutVideo(payload: {
   return response.data;
 }
 
+export async function detectClips(payload: {
+  video_id: string;
+  threshold: number;
+  min_clip_seconds: number;
+  end_trim_ms: number;
+}) {
+  const response = await axios.post(`${API_URL}/videos/detect-clips`, payload);
+  return response.data;
+}
+
 export async function getJob(jobId: string) {
   const response = await axios.get(`${API_URL}/jobs/${jobId}`, {
     params: {

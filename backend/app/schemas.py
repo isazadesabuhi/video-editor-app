@@ -27,9 +27,16 @@ class CutRange(BaseModel):
 
 class CutRequest(BaseModel):
     video_id: str
-    cuts: List[CutRange] = Field(min_length=1, max_length=100)
+    cuts: List[CutRange] = Field(min_length=1, max_length=500)
     mode: Literal["copy", "accurate"] = "copy"
     quality: Literal["high", "very_high", "lossless"] = "high"
+
+
+class DetectClipsRequest(BaseModel):
+    video_id: str
+    threshold: float = Field(default=0.35, ge=0.05, le=1)
+    min_clip_seconds: float = Field(default=2, ge=0.25, le=300)
+    end_trim_ms: int = Field(default=120, ge=0, le=2000)
 
 
 class JobResponse(BaseModel):

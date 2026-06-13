@@ -9,7 +9,12 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from app.schemas import CropRequest, CutRequest, YouTubeDownloadRequest
+from app.schemas import (
+    CropRequest,
+    CutRequest,
+    DetectClipsRequest,
+    YouTubeDownloadRequest,
+)
 from app.services.ffmpeg_service import (
     UPLOAD_DIR,
     OUTPUT_DIR,
@@ -18,6 +23,7 @@ from app.services.ffmpeg_service import (
     crop_selection_for_vertical_social,
     cut_video_copy,
     cut_video_accurate,
+    detect_scene_clips,
 )
 
 
@@ -228,6 +234,26 @@ def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
         "job_id": job_id,
         "status": "processing",
         "message": "Cut job started",
+    }
+
+
+@app.post("/videos/detect-clips")
+def detect_clips_endpoint(payload: DetectClipsRequest):
+    input_path = find_uploaded_video(payload.video_id)
+
+    try:
+        clips = detect_scene_clips(
+            input_path=input_path,
+            threshold=payload.threshold,
+            min_clip_seconds=payload.min_clip_seconds,
+            end_trim_ms=payload.end_trim_ms,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return {
+        "clips": clips,
+        "count": len(clips),
     }
 
 

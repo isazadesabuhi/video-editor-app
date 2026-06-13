@@ -75,17 +75,14 @@ export default function CutPage() {
         onUpload={handleUpload}
       />
 
-      {videoUrl && (
-        <section className="space-y-4 rounded border p-4">
-          <h2 className="text-xl font-semibold">2. Preview video</h2>
-          <video src={videoUrl} controls className="w-full bg-black" />
-        </section>
-      )}
-
-      {videoId && (
+      {videoId && videoUrl && (
         <section className="space-y-4">
-          <h2 className="text-xl font-semibold">3. Add cuts</h2>
-          <CutListEditor videoId={videoId} onJobStarted={addJob} />
+          <h2 className="text-xl font-semibold">2. Add cuts</h2>
+          <CutListEditor
+            videoId={videoId}
+            videoUrl={videoUrl}
+            onJobStarted={addJob}
+          />
         </section>
       )}
 
