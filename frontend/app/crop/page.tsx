@@ -7,9 +7,13 @@ import JobStatusList from "@/components/JobStatusList";
 import VideoUploadStep from "@/components/VideoUploadStep";
 import {
   cropVideo,
+  detectDynamicCrops,
   downloadYouTubeVideo,
+  exportDynamicCrop,
+  getApiErrorMessage,
   getVideoPreviewUrl,
   uploadVideo,
+  type DynamicCropSegment,
   type JobStatus,
 } from "@/lib/api";
 
@@ -35,6 +39,14 @@ export default function CropPage() {
   const [cropQuality, setCropQuality] = useState<
     "high" | "very_high" | "lossless"
   >("high");
+  const [dynamicCropSegments, setDynamicCropSegments] = useState<
+    DynamicCropSegment[]
+  >([]);
+  const [dynamicThreshold, setDynamicThreshold] = useState(0.35);
+  const [dynamicMinSeconds, setDynamicMinSeconds] = useState(2);
+  const [dynamicMaxSegments, setDynamicMaxSegments] = useState(80);
+  const [isDetectingDynamicCrop, setIsDetectingDynamicCrop] = useState(false);
+  const [dynamicCropError, setDynamicCropError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobStatus[]>([]);
 
   useEffect(() => {
@@ -68,6 +80,7 @@ export default function CropPage() {
     setFile(selectedFile);
     setVideoId(null);
     setCrop(null);
+    setDynamicCropSegments([]);
     setUploadMessage(null);
     setVideoUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -90,6 +103,7 @@ export default function CropPage() {
     setYoutubeError(null);
     setVideoId(null);
     setCrop(null);
+    setDynamicCropSegments([]);
 
     try {
       const result = await downloadYouTubeVideo({
@@ -166,6 +180,74 @@ export default function CropPage() {
     addJob({
       id: result.job_id,
       label: "TikTok/Shorts export from selected crop",
+    });
+  }
+
+  async function handleDetectDynamicCrops() {
+    if (!videoId) return;
+
+    setIsDetectingDynamicCrop(true);
+    setDynamicCropError(null);
+
+    try {
+      const result = await detectDynamicCrops({
+        video_id: videoId,
+        threshold: dynamicThreshold,
+        min_segment_seconds: dynamicMinSeconds,
+        max_segments: dynamicMaxSegments,
+      });
+
+      if (!Array.isArray(result.segments) || result.segments.length === 0) {
+        setDynamicCropError("No dynamic crop segments were detected.");
+        return;
+      }
+
+      setDynamicCropSegments(result.segments);
+    } catch (error) {
+      setDynamicCropError(
+        getApiErrorMessage(error, "Could not detect dynamic crops")
+      );
+    } finally {
+      setIsDetectingDynamicCrop(false);
+    }
+  }
+
+  function updateDynamicSegment(
+    index: number,
+    field: keyof DynamicCropSegment,
+    value: string
+  ) {
+    setDynamicCropSegments((prev) =>
+      prev.map((segment, i) =>
+        i === index
+          ? {
+              ...segment,
+              [field]:
+                field === "start" || field === "end" ? value : Number(value),
+            }
+          : segment
+      )
+    );
+  }
+
+  function removeDynamicSegment(index: number) {
+    setDynamicCropSegments((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleDynamicCropExport() {
+    if (!videoId || dynamicCropSegments.length === 0) return;
+
+    const result = await exportDynamicCrop({
+      video_id: videoId,
+      segments: dynamicCropSegments,
+      quality: cropQuality,
+      output_width: 1920,
+      output_height: 1080,
+    });
+
+    addJob({
+      id: result.job_id,
+      label: `Dynamic crop export (${dynamicCropSegments.length} segments)`,
     });
   }
 
@@ -301,6 +383,140 @@ export default function CropPage() {
             <p className="text-sm text-gray-600">
               {customCropDisabledReason}
             </p>
+          )}
+        </section>
+      )}
+
+      {videoId && (
+        <section className="space-y-4 rounded border p-4">
+          <div>
+            <h2 className="text-xl font-semibold">Auto dynamic crop</h2>
+            <p className="text-sm text-gray-600">
+              Detect scene changes, find likely black padding per segment, then export one joined video.
+            </p>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Scene sensitivity</span>
+              <input
+                type="number"
+                min="0.05"
+                max="1"
+                step="0.05"
+                value={dynamicThreshold}
+                onChange={(event) =>
+                  setDynamicThreshold(Number(event.target.value))
+                }
+                className="w-full rounded border p-2"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Minimum segment seconds</span>
+              <input
+                type="number"
+                min="0.25"
+                max="300"
+                step="0.25"
+                value={dynamicMinSeconds}
+                onChange={(event) =>
+                  setDynamicMinSeconds(Number(event.target.value))
+                }
+                className="w-full rounded border p-2"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Max segments</span>
+              <input
+                type="number"
+                min="1"
+                max="300"
+                step="1"
+                value={dynamicMaxSegments}
+                onChange={(event) =>
+                  setDynamicMaxSegments(Number(event.target.value))
+                }
+                className="w-full rounded border p-2"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-4">
+            <button
+              onClick={handleDetectDynamicCrops}
+              disabled={isDetectingDynamicCrop}
+              className="rounded bg-black px-4 py-2 text-white disabled:opacity-50"
+            >
+              {isDetectingDynamicCrop
+                ? "Detecting..."
+                : "Detect dynamic crops"}
+            </button>
+
+            <button
+              onClick={handleDynamicCropExport}
+              disabled={dynamicCropSegments.length === 0}
+              className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
+            >
+              Export dynamic crop
+            </button>
+          </div>
+
+          {dynamicCropError && (
+            <p className="text-sm text-red-600">{dynamicCropError}</p>
+          )}
+
+          {dynamicCropSegments.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-600">
+                Review these suggestions before exporting. Adjust crop values if a logo or border remains.
+              </p>
+
+              {dynamicCropSegments.map((segment, index) => (
+                <div
+                  key={`${segment.start}-${index}`}
+                  className="grid gap-3 rounded border p-3 lg:grid-cols-8"
+                >
+                  {(["start", "end"] as const).map((field) => (
+                    <label key={field} className="space-y-1">
+                      <span className="text-sm font-medium">{field}</span>
+                      <input
+                        value={segment[field]}
+                        onChange={(event) =>
+                          updateDynamicSegment(index, field, event.target.value)
+                        }
+                        className="w-full rounded border p-2"
+                      />
+                    </label>
+                  ))}
+
+                  {(["x", "y", "width", "height"] as const).map((field) => (
+                    <label key={field} className="space-y-1">
+                      <span className="text-sm font-medium">{field}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={segment[field]}
+                        onChange={(event) =>
+                          updateDynamicSegment(index, field, event.target.value)
+                        }
+                        className="w-full rounded border p-2"
+                      />
+                    </label>
+                  ))}
+
+                  <div className="flex items-end lg:col-span-2">
+                    <button
+                      onClick={() => removeDynamicSegment(index)}
+                      className="rounded border px-4 py-2"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </section>
       )}

@@ -1,5 +1,6 @@
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -140,14 +141,36 @@ def get_video_duration(input_path: Path) -> float:
         raise RuntimeError("Could not read video duration") from error
 
 
-def detect_scene_clips(
+def get_video_dimensions(input_path: Path) -> tuple[int, int]:
+    output = run_capture_command(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
+            str(input_path),
+        ]
+    )
+
+    try:
+        width, height = output.strip().split("x")
+        return int(width), int(height)
+    except ValueError as error:
+        raise RuntimeError("Could not read video dimensions") from error
+
+
+def get_scene_boundaries(
     input_path: Path,
     threshold: float = 0.35,
-    min_clip_seconds: float = 2,
-    end_trim_ms: int = 120,
-) -> list[dict[str, str]]:
+    min_segment_seconds: float = 2,
+    max_segments: int = 300,
+) -> list[tuple[float, float]]:
     duration = get_video_duration(input_path)
-    end_trim_seconds = end_trim_ms / 1000
 
     output = run_capture_command(
         [
@@ -173,16 +196,40 @@ def detect_scene_clips(
     boundaries = [0.0]
 
     for scene_time in scene_times:
-        if scene_time - boundaries[-1] >= min_clip_seconds:
+        if len(boundaries) >= max_segments:
+            break
+
+        if scene_time - boundaries[-1] >= min_segment_seconds:
             boundaries.append(scene_time)
 
-    if duration - boundaries[-1] >= min_clip_seconds:
+    if duration - boundaries[-1] >= min_segment_seconds:
         boundaries.append(duration)
     elif len(boundaries) > 1:
         boundaries[-1] = duration
 
+    return [
+        (start, end)
+        for start, end in zip(boundaries, boundaries[1:])
+        if end - start >= min_segment_seconds
+    ]
+
+
+def detect_scene_clips(
+    input_path: Path,
+    threshold: float = 0.35,
+    min_clip_seconds: float = 2,
+    end_trim_ms: int = 120,
+) -> list[dict[str, str]]:
+    duration = get_video_duration(input_path)
+    end_trim_seconds = end_trim_ms / 1000
+    boundaries = get_scene_boundaries(
+        input_path=input_path,
+        threshold=threshold,
+        min_segment_seconds=min_clip_seconds,
+    )
+
     clips = []
-    for index, (start, end) in enumerate(zip(boundaries, boundaries[1:]), start=1):
+    for index, (start, end) in enumerate(boundaries, start=1):
         trimmed_end = end
 
         if end < duration:
@@ -207,6 +254,179 @@ def detect_scene_clips(
         )
 
     return clips
+
+
+def detect_crop_for_range(
+    input_path: Path,
+    start: float,
+    end: float,
+) -> dict[str, int]:
+    source_width, source_height = get_video_dimensions(input_path)
+    duration = max(0.25, end - start)
+
+    output = run_capture_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-ss",
+            f"{start:.3f}",
+            "-t",
+            f"{duration:.3f}",
+            "-i",
+            str(input_path),
+            "-vf",
+            "fps=1,cropdetect=24:16:0",
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+
+    crops = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", output)
+
+    if not crops:
+        return {
+            "x": 0,
+            "y": 0,
+            "width": source_width,
+            "height": source_height,
+        }
+
+    crop_counts: dict[tuple[int, int, int, int], int] = {}
+    for crop in crops:
+        width, height, x, y = map(int, crop)
+        crop_counts[(width, height, x, y)] = crop_counts.get((width, height, x, y), 0) + 1
+
+    width, height, x, y = max(
+        crop_counts,
+        key=lambda values: (crop_counts[values], values[0] * values[1]),
+    )
+
+    return {
+        "x": max(0, x),
+        "y": max(0, y),
+        "width": max(2, min(width, source_width - x)),
+        "height": max(2, min(height, source_height - y)),
+    }
+
+
+def detect_dynamic_crop_segments(
+    input_path: Path,
+    threshold: float = 0.35,
+    min_segment_seconds: float = 2,
+    max_segments: int = 80,
+) -> list[dict[str, int | str]]:
+    ranges = get_scene_boundaries(
+        input_path=input_path,
+        threshold=threshold,
+        min_segment_seconds=min_segment_seconds,
+        max_segments=max_segments,
+    )
+
+    if not ranges:
+        duration = get_video_duration(input_path)
+        ranges = [(0, duration)]
+
+    segments = []
+    for start, end in ranges[:max_segments]:
+        crop = detect_crop_for_range(input_path, start, end)
+        segments.append(
+            {
+                "start": seconds_to_time(start),
+                "end": seconds_to_time(end),
+                **crop,
+            }
+        )
+
+    return segments
+
+
+def export_dynamic_crop_video(
+    input_path: Path,
+    output_path: Path,
+    segments: list[dict[str, int | str]],
+    quality: str = "high",
+    output_width: int = 1920,
+    output_height: int = 1080,
+) -> None:
+    crf = get_crf(quality)
+
+    with tempfile.TemporaryDirectory(prefix="dynamic_crop_") as temp_dir:
+        temp_path = Path(temp_dir)
+        part_paths = []
+
+        for index, segment in enumerate(segments, start=1):
+            width = int(segment["width"])
+            height = int(segment["height"])
+            width = width if width % 2 == 0 else width - 1
+            height = height if height % 2 == 0 else height - 1
+
+            if width <= 0 or height <= 0:
+                raise ValueError("Crop width and height must be at least 2 pixels")
+
+            part_path = temp_path / f"part_{index:04d}.mp4"
+            part_paths.append(part_path)
+
+            command = [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                normalize_time_for_ffmpeg(str(segment["start"])),
+                "-to",
+                normalize_time_for_ffmpeg(str(segment["end"])),
+                "-i",
+                str(input_path),
+                "-vf",
+                (
+                    f"crop={width}:{height}:{int(segment['x'])}:{int(segment['y'])},"
+                    f"scale={output_width}:{output_height}:force_original_aspect_ratio=decrease,"
+                    f"pad={output_width}:{output_height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+                ),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-c:v",
+                "libx264",
+                "-crf",
+                crf,
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                str(part_path),
+            ]
+
+            run_command(command)
+
+        concat_file = temp_path / "concat.txt"
+        concat_file.write_text(
+            "".join(f"file '{part_path.as_posix()}'\n" for part_path in part_paths),
+            encoding="utf-8",
+        )
+
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )
 
 
 def crop_video(

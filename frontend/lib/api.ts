@@ -15,6 +15,15 @@ export type JobStatus = {
   finished_at?: string;
 };
 
+export type DynamicCropSegment = {
+  start: string;
+  end: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export async function uploadVideo(file: File) {
   const formData = new FormData();
   formData.append("file", file);
@@ -50,6 +59,30 @@ export async function cropVideo(payload: {
   preset?: string;
 }) {
   const response = await axios.post(`${API_URL}/videos/crop`, payload);
+  return response.data;
+}
+
+export async function detectDynamicCrops(payload: {
+  video_id: string;
+  threshold: number;
+  min_segment_seconds: number;
+  max_segments: number;
+}) {
+  const response = await axios.post(
+    `${API_URL}/videos/detect-dynamic-crops`,
+    payload
+  );
+  return response.data;
+}
+
+export async function exportDynamicCrop(payload: {
+  video_id: string;
+  segments: DynamicCropSegment[];
+  quality: "high" | "very_high" | "lossless";
+  output_width: number;
+  output_height: number;
+}) {
+  const response = await axios.post(`${API_URL}/videos/dynamic-crop`, payload);
   return response.data;
 }
 

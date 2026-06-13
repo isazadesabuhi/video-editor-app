@@ -12,7 +12,9 @@ from fastapi.responses import FileResponse
 from app.schemas import (
     CropRequest,
     CutRequest,
+    DetectDynamicCropsRequest,
     DetectClipsRequest,
+    DynamicCropRequest,
     YouTubeDownloadRequest,
 )
 from app.services.ffmpeg_service import (
@@ -23,7 +25,9 @@ from app.services.ffmpeg_service import (
     crop_selection_for_vertical_social,
     cut_video_copy,
     cut_video_accurate,
+    detect_dynamic_crop_segments,
     detect_scene_clips,
+    export_dynamic_crop_video,
 )
 
 
@@ -175,6 +179,67 @@ def crop_video_endpoint(payload: CropRequest, background_tasks: BackgroundTasks)
     }
 
 
+@app.post("/videos/detect-dynamic-crops")
+def detect_dynamic_crops_endpoint(payload: DetectDynamicCropsRequest):
+    input_path = find_uploaded_video(payload.video_id)
+
+    try:
+        segments = detect_dynamic_crop_segments(
+            input_path=input_path,
+            threshold=payload.threshold,
+            min_segment_seconds=payload.min_segment_seconds,
+            max_segments=payload.max_segments,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return {
+        "segments": segments,
+        "count": len(segments),
+    }
+
+
+@app.post("/videos/dynamic-crop")
+def dynamic_crop_endpoint(payload: DynamicCropRequest, background_tasks: BackgroundTasks):
+    input_path = find_uploaded_video(payload.video_id)
+
+    job_id = str(uuid.uuid4())
+    output_path = OUTPUT_DIR / f"{job_id}_dynamic_cropped.mp4"
+
+    JOBS[job_id] = {
+        "status": "processing",
+        "output": str(output_path),
+        "started_at": utc_now(),
+    }
+
+    def task():
+        try:
+            export_dynamic_crop_video(
+                input_path=input_path,
+                output_path=output_path,
+                segments=[dump_schema(segment) for segment in payload.segments],
+                quality=payload.quality,
+                output_width=payload.output_width,
+                output_height=payload.output_height,
+            )
+
+            JOBS[job_id]["status"] = "done"
+            JOBS[job_id]["finished_at"] = utc_now()
+
+        except Exception as error:
+            JOBS[job_id]["status"] = "failed"
+            JOBS[job_id]["error"] = str(error)
+            JOBS[job_id]["finished_at"] = utc_now()
+
+    background_tasks.add_task(task)
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "message": "Dynamic crop job started",
+    }
+
+
 @app.post("/videos/cut")
 def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
     input_path = find_uploaded_video(payload.video_id)
@@ -297,6 +362,13 @@ def find_uploaded_video(video_id: str) -> Path:
         raise HTTPException(status_code=404, detail="Video not found")
 
     return matches[0]
+
+
+def dump_schema(schema):
+    if hasattr(schema, "model_dump"):
+        return schema.model_dump()
+
+    return schema.dict()
 
 
 def utc_now() -> str:
