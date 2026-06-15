@@ -63,18 +63,41 @@ export default function JobStatusList({ jobs, onJobUpdate }: Props) {
               <p className="font-medium">{job.label}</p>
               <p className="text-sm text-gray-600">
                 {job.status === "processing" && "Processing"}
-                {job.status === "done" && "Ready to download"}
+                {job.status === "done" &&
+                  (job.cut_output_dir || job.shorts_output_dir
+                    ? "Ready in output folders"
+                    : "Ready to download")}
                 {job.status === "failed" && (job.error || "Export failed")}
               </p>
+
+              {job.status === "done" && job.cut_output_dir && (
+                <p className="mt-2 text-sm text-gray-600">
+                  Raw cuts:{" "}
+                  <code className="rounded bg-gray-100 px-1">
+                    {job.cut_output_dir}
+                  </code>
+                </p>
+              )}
+
+              {job.status === "done" && job.shorts_output_dir && (
+                <p className="mt-1 text-sm text-gray-600">
+                  Shorts clips:{" "}
+                  <code className="rounded bg-gray-100 px-1">
+                    {job.shorts_output_dir}
+                  </code>
+                </p>
+              )}
             </div>
 
-            {job.status === "done" && (
-              <a
-                href={getDownloadUrl(job.id)}
-                className="w-fit rounded bg-black px-4 py-2 text-sm text-white"
-              >
-                Download
-              </a>
+            {job.status === "done" && (job.output || job.archive) && (
+              <div className="flex flex-wrap gap-2">
+                <a
+                  href={getDownloadUrl(job.id)}
+                  className="w-fit rounded bg-black px-4 py-2 text-sm text-white"
+                >
+                  Download
+                </a>
+              </div>
             )}
           </div>
         ))}

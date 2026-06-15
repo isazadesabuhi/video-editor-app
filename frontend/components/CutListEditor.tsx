@@ -1,13 +1,21 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { cutVideo, detectClips, getApiErrorMessage } from "@/lib/api";
+import {
+  cutAndPrepareShorts,
+  cutToShorts,
+  cutVideo,
+  detectClips,
+  getApiErrorMessage,
+} from "@/lib/api";
 
 type Cut = {
   start: string;
   end: string;
   name: string;
 };
+
+type ShortsMode = "fit_padding" | "blur_background" | "crop_fill";
 
 type Props = {
   videoId: string;
@@ -33,7 +41,10 @@ export default function CutListEditor({
     "very_high"
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPreparingShorts, setIsPreparingShorts] = useState(false);
+  const [isCreatingShortsOnly, setIsCreatingShortsOnly] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isCutListOpen, setIsCutListOpen] = useState(true);
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [sceneThreshold, setSceneThreshold] = useState(0.35);
@@ -42,6 +53,11 @@ export default function CutListEditor({
   const [selectedCutIndex, setSelectedCutIndex] = useState(0);
   const [selectionStart, setSelectionStart] = useState("00:00:00:000");
   const [selectionEnd, setSelectionEnd] = useState("00:00:10:000");
+  const [shortsMode, setShortsMode] =
+    useState<ShortsMode>("blur_background");
+  const [shortsQuality, setShortsQuality] = useState<
+    "high" | "very_high" | "lossless"
+  >("high");
 
   function formatTime(totalSeconds: number) {
     const totalMilliseconds = Math.max(0, Math.round(totalSeconds * 1000));
@@ -166,6 +182,64 @@ export default function CutListEditor({
       setSubmitError(getApiErrorMessage(error, "Could not start cut job"));
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function submitCutAndPrepareShorts() {
+    setIsPreparingShorts(true);
+    setSubmitError(null);
+
+    try {
+      const result = await cutAndPrepareShorts({
+        video_id: videoId,
+        mode,
+        quality,
+        shorts_mode: shortsMode,
+        shorts_quality: shortsQuality,
+        cuts,
+      });
+
+      onJobStarted({
+        id: result.job_id,
+        label: `Cut + Shorts preparation (${cuts.length} clip${
+          cuts.length === 1 ? "" : "s"
+        })`,
+      });
+    } catch (error) {
+      setSubmitError(
+        getApiErrorMessage(error, "Could not start Shorts preparation job")
+      );
+    } finally {
+      setIsPreparingShorts(false);
+    }
+  }
+
+  async function submitShortsOnly() {
+    setIsCreatingShortsOnly(true);
+    setSubmitError(null);
+
+    try {
+      const result = await cutToShorts({
+        video_id: videoId,
+        mode,
+        quality,
+        shorts_mode: shortsMode,
+        shorts_quality: shortsQuality,
+        cuts,
+      });
+
+      onJobStarted({
+        id: result.job_id,
+        label: `Shorts only (${cuts.length} clip${
+          cuts.length === 1 ? "" : "s"
+        })`,
+      });
+    } catch (error) {
+      setSubmitError(
+        getApiErrorMessage(error, "Could not start Shorts-only job")
+      );
+    } finally {
+      setIsCreatingShortsOnly(false);
     }
   }
 
@@ -327,60 +401,124 @@ export default function CutListEditor({
         </label>
       </div>
 
-      {cuts.map((cut, index) => (
-        <div
-          key={index}
-          className={`grid gap-3 rounded border p-3 md:grid-cols-5 ${
-            selectedCutIndex === index ? "border-black" : ""
-          }`}
-        >
-          <label className="space-y-1">
-            <span className="text-sm font-medium">Start</span>
-            <input
-              value={cut.start}
-              onChange={(e) => updateCut(index, "start", e.target.value)}
-              className="w-full rounded border p-2"
-              placeholder="HH:MM:SS or HH:MM:SS:MS"
-            />
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-sm font-medium">End</span>
-            <input
-              value={cut.end}
-              onChange={(e) => updateCut(index, "end", e.target.value)}
-              className="w-full rounded border p-2"
-              placeholder="HH:MM:SS or HH:MM:SS:MS"
-            />
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-sm font-medium">Clip name</span>
-            <input
-              value={cut.name}
-              onChange={(e) => updateCut(index, "name", e.target.value)}
-              className="w-full rounded border p-2"
-              placeholder="clip_name"
-            />
-          </label>
-
-          <div className="flex items-end gap-2">
-            <button
-              onClick={() => setSelectedCutIndex(index)}
-              className="rounded border px-4 py-2"
-            >
-              {selectedCutIndex === index ? "Selected" : "Select"}
-            </button>
-            <button
-              onClick={() => removeCut(index)}
-              disabled={cuts.length === 1}
-              className="rounded border px-4 py-2 disabled:opacity-50"
-            >
-              Remove
-            </button>
-          </div>
+      <div className="space-y-4 rounded border border-blue-200 bg-blue-50 p-3">
+        <div>
+          <h3 className="font-semibold">Prepare cut clips for Shorts</h3>
+          <p className="text-sm text-gray-600">
+            Create both cut_clips and shorts_clips, or create only the vertical 1080x1920 shorts_clips folder.
+          </p>
         </div>
-      ))}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Shorts layout</span>
+            <select
+              value={shortsMode}
+              onChange={(event) =>
+                setShortsMode(event.target.value as ShortsMode)
+              }
+              className="w-full rounded border p-2"
+            >
+              <option value="blur_background">Blurred background</option>
+              <option value="crop_fill">Full-screen crop</option>
+              <option value="fit_padding">Black padding</option>
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Shorts encode quality</span>
+            <select
+              value={shortsQuality}
+              onChange={(event) =>
+                setShortsQuality(
+                  event.target.value as "high" | "very_high" | "lossless"
+                )
+              }
+              className="w-full rounded border p-2"
+            >
+              <option value="high">High, CRF 18</option>
+              <option value="very_high">Very high, CRF 16</option>
+              <option value="lossless">Lossless</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded border p-3">
+        <button
+          onClick={() => setIsCutListOpen((prev) => !prev)}
+          className="flex w-full items-center justify-between text-left"
+        >
+          <span>
+            <span className="block font-semibold">Cut list</span>
+            <span className="block text-sm text-gray-600">
+              {cuts.length} clip{cuts.length === 1 ? "" : "s"} selected
+            </span>
+          </span>
+          <span className="text-sm text-gray-600">
+            {isCutListOpen ? "Hide" : "Show"}
+          </span>
+        </button>
+
+        {isCutListOpen && (
+          <div className="space-y-3">
+            {cuts.map((cut, index) => (
+              <div
+                key={index}
+                className={`grid gap-3 rounded border p-3 md:grid-cols-5 ${
+                  selectedCutIndex === index ? "border-black" : ""
+                }`}
+              >
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">Start</span>
+                  <input
+                    value={cut.start}
+                    onChange={(e) => updateCut(index, "start", e.target.value)}
+                    className="w-full rounded border p-2"
+                    placeholder="HH:MM:SS or HH:MM:SS:MS"
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">End</span>
+                  <input
+                    value={cut.end}
+                    onChange={(e) => updateCut(index, "end", e.target.value)}
+                    className="w-full rounded border p-2"
+                    placeholder="HH:MM:SS or HH:MM:SS:MS"
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">Clip name</span>
+                  <input
+                    value={cut.name}
+                    onChange={(e) => updateCut(index, "name", e.target.value)}
+                    className="w-full rounded border p-2"
+                    placeholder="clip_name"
+                  />
+                </label>
+
+                <div className="flex items-end gap-2">
+                  <button
+                    onClick={() => setSelectedCutIndex(index)}
+                    className="rounded border px-4 py-2"
+                  >
+                    {selectedCutIndex === index ? "Selected" : "Select"}
+                  </button>
+                  <button
+                    onClick={() => removeCut(index)}
+                    disabled={cuts.length === 1}
+                    className="rounded border px-4 py-2 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="flex gap-4">
         <button onClick={addCut} className="rounded border px-4 py-2">
@@ -393,6 +531,22 @@ export default function CutListEditor({
           className="rounded bg-black px-4 py-2 text-white disabled:opacity-50"
         >
           {isSubmitting ? "Starting..." : "Cut video"}
+        </button>
+
+        <button
+          onClick={submitCutAndPrepareShorts}
+          disabled={isPreparingShorts}
+          className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
+        >
+          {isPreparingShorts ? "Starting..." : "Cut + prepare Shorts"}
+        </button>
+
+        <button
+          onClick={submitShortsOnly}
+          disabled={isCreatingShortsOnly}
+          className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
+        >
+          {isCreatingShortsOnly ? "Starting..." : "Create only Shorts"}
         </button>
       </div>
 

@@ -1,20 +1,24 @@
 import shutil
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from re import sub
 from zipfile import ZIP_DEFLATED, ZipFile
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.schemas import (
+    CutAndPrepareShortsRequest,
     CropRequest,
     CutRequest,
     DetectDynamicCropsRequest,
     DetectClipsRequest,
     DynamicCropRequest,
+    MakeShortResponse,
+    ShortMode,
     YouTubeDownloadRequest,
 )
 from app.services.ffmpeg_service import (
@@ -28,6 +32,8 @@ from app.services.ffmpeg_service import (
     detect_dynamic_crop_segments,
     detect_scene_clips,
     export_dynamic_crop_video,
+    get_video_dimensions,
+    process_vertical_short,
 )
 
 
@@ -62,10 +68,63 @@ async def upload_video(file: UploadFile = File(...)):
     with saved_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    try:
+        original_width, original_height = get_video_dimensions(saved_path)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
     return {
         "video_id": video_id,
         "filename": saved_path.name,
+        "original_width": original_width,
+        "original_height": original_height,
         "message": "Video uploaded successfully",
+    }
+
+
+@app.post("/videos/make-short", response_model=MakeShortResponse)
+async def make_short_video(
+    file: UploadFile = File(...),
+    mode: ShortMode = Form(...),
+    x: int | None = Form(default=None),
+    y: int | None = Form(default=None),
+    width: int | None = Form(default=None),
+    height: int | None = Form(default=None),
+):
+    if not file.content_type or not file.content_type.startswith("video/"):
+        raise HTTPException(status_code=400, detail="Only video files are allowed")
+
+    video_id = str(uuid.uuid4())
+    original_filename = file.filename or "video.mp4"
+    suffix = Path(original_filename).suffix or ".mp4"
+    input_path = UPLOAD_DIR / f"{video_id}{suffix}"
+    output_filename = f"{video_id}_{mode}.mp4"
+    output_path = OUTPUT_DIR / output_filename
+
+    with input_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        original_width, original_height = process_vertical_short(
+            input_path=input_path,
+            output_path=output_path,
+            mode=mode,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return {
+        "original_filename": original_filename,
+        "original_width": original_width,
+        "original_height": original_height,
+        "output_filename": output_filename,
+        "output_path": str(output_path),
+        "selected_mode": mode,
+        "final_size": "1080x1920",
     }
 
 
@@ -135,7 +194,23 @@ def crop_video_endpoint(payload: CropRequest, background_tasks: BackgroundTasks)
 
     def task():
         try:
-            if payload.preset == "vertical_from_crop":
+            if payload.preset in [
+                "fit_padding",
+                "blur_background",
+                "crop_fill",
+                "manual_crop",
+            ]:
+                process_vertical_short(
+                    input_path=input_path,
+                    output_path=output_path,
+                    mode=payload.preset,
+                    quality=payload.quality,
+                    x=payload.x,
+                    y=payload.y,
+                    width=payload.width,
+                    height=payload.height,
+                )
+            elif payload.preset == "vertical_from_crop":
                 crop_selection_for_vertical_social(
                     input_path=input_path,
                     output_path=output_path,
@@ -302,6 +377,156 @@ def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
     }
 
 
+@app.post("/videos/cut-and-prepare-shorts")
+def cut_and_prepare_shorts_endpoint(
+    payload: CutAndPrepareShortsRequest,
+    background_tasks: BackgroundTasks,
+):
+    input_path = find_uploaded_video(payload.video_id)
+
+    job_id = str(uuid.uuid4())
+    job_output_dir = OUTPUT_DIR / job_id
+    cut_output_dir = job_output_dir / "cut_clips"
+    shorts_output_dir = job_output_dir / "shorts_clips"
+    cut_output_dir.mkdir(parents=True, exist_ok=True)
+    shorts_output_dir.mkdir(parents=True, exist_ok=True)
+
+    JOBS[job_id] = {
+        "status": "processing",
+        "cut_outputs": [],
+        "shorts_outputs": [],
+        "cut_output_dir": str(cut_output_dir),
+        "shorts_output_dir": str(shorts_output_dir),
+        "started_at": utc_now(),
+    }
+
+    def task():
+        try:
+            used_names: set[str] = set()
+
+            for index, cut in enumerate(payload.cuts, start=1):
+                safe_name = sanitize_filename(cut.name, f"clip_{index}")
+                safe_name = make_unique_name(safe_name, used_names)
+                cut_output_path = cut_output_dir / f"{safe_name}.mp4"
+                shorts_output_path = shorts_output_dir / f"{safe_name}_short.mp4"
+
+                if payload.mode == "accurate":
+                    cut_video_accurate(
+                        input_path=input_path,
+                        output_path=cut_output_path,
+                        start=cut.start,
+                        end=cut.end,
+                        quality=payload.quality,
+                    )
+                else:
+                    cut_video_copy(
+                        input_path=input_path,
+                        output_path=cut_output_path,
+                        start=cut.start,
+                        end=cut.end,
+                    )
+
+                process_vertical_short(
+                    input_path=cut_output_path,
+                    output_path=shorts_output_path,
+                    mode=payload.shorts_mode,
+                    quality=payload.shorts_quality,
+                )
+
+                JOBS[job_id]["cut_outputs"].append(str(cut_output_path))
+                JOBS[job_id]["shorts_outputs"].append(str(shorts_output_path))
+
+            JOBS[job_id]["status"] = "done"
+            JOBS[job_id]["finished_at"] = utc_now()
+
+        except Exception as error:
+            JOBS[job_id]["status"] = "failed"
+            JOBS[job_id]["error"] = str(error)
+            JOBS[job_id]["finished_at"] = utc_now()
+
+    background_tasks.add_task(task)
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "message": "Cut and Shorts preparation job started",
+    }
+
+
+@app.post("/videos/cut-to-shorts")
+def cut_to_shorts_endpoint(
+    payload: CutAndPrepareShortsRequest,
+    background_tasks: BackgroundTasks,
+):
+    input_path = find_uploaded_video(payload.video_id)
+
+    job_id = str(uuid.uuid4())
+    job_output_dir = OUTPUT_DIR / job_id
+    shorts_output_dir = job_output_dir / "shorts_clips"
+    shorts_output_dir.mkdir(parents=True, exist_ok=True)
+
+    JOBS[job_id] = {
+        "status": "processing",
+        "shorts_outputs": [],
+        "shorts_output_dir": str(shorts_output_dir),
+        "started_at": utc_now(),
+    }
+
+    def task():
+        try:
+            used_names: set[str] = set()
+
+            with tempfile.TemporaryDirectory(prefix=f"{job_id}_cuts_") as temp_dir:
+                temp_path = Path(temp_dir)
+
+                for index, cut in enumerate(payload.cuts, start=1):
+                    safe_name = sanitize_filename(cut.name, f"clip_{index}")
+                    safe_name = make_unique_name(safe_name, used_names)
+                    temp_cut_path = temp_path / f"{safe_name}.mp4"
+                    shorts_output_path = shorts_output_dir / f"{safe_name}_short.mp4"
+
+                    if payload.mode == "accurate":
+                        cut_video_accurate(
+                            input_path=input_path,
+                            output_path=temp_cut_path,
+                            start=cut.start,
+                            end=cut.end,
+                            quality=payload.quality,
+                        )
+                    else:
+                        cut_video_copy(
+                            input_path=input_path,
+                            output_path=temp_cut_path,
+                            start=cut.start,
+                            end=cut.end,
+                        )
+
+                    process_vertical_short(
+                        input_path=temp_cut_path,
+                        output_path=shorts_output_path,
+                        mode=payload.shorts_mode,
+                        quality=payload.shorts_quality,
+                    )
+
+                    JOBS[job_id]["shorts_outputs"].append(str(shorts_output_path))
+
+            JOBS[job_id]["status"] = "done"
+            JOBS[job_id]["finished_at"] = utc_now()
+
+        except Exception as error:
+            JOBS[job_id]["status"] = "failed"
+            JOBS[job_id]["error"] = str(error)
+            JOBS[job_id]["finished_at"] = utc_now()
+
+    background_tasks.add_task(task)
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "message": "Shorts-only preparation job started",
+    }
+
+
 @app.post("/videos/detect-clips")
 def detect_clips_endpoint(payload: DetectClipsRequest):
     input_path = find_uploaded_video(payload.video_id)
@@ -353,6 +578,26 @@ def download_result(job_id: str):
         return FileResponse(job["archive"], filename=Path(job["archive"]).name)
 
     raise HTTPException(status_code=404, detail="No downloadable output found")
+
+
+@app.get("/download/{job_id}/raw")
+def download_raw_cut_result(job_id: str):
+    job = JOBS.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    refresh_job_status(job)
+
+    if job["status"] != "done":
+        raise HTTPException(status_code=400, detail="Job is not finished yet")
+
+    raw_archive = job.get("raw_archive")
+
+    if not raw_archive:
+        raise HTTPException(status_code=404, detail="No raw cut archive found")
+
+    return FileResponse(raw_archive, filename=Path(raw_archive).name)
 
 
 def find_uploaded_video(video_id: str) -> Path:

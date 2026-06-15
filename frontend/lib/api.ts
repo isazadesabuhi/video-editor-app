@@ -11,6 +11,9 @@ export type JobStatus = {
   output?: string;
   outputs?: string[];
   archive?: string;
+  raw_archive?: string;
+  cut_output_dir?: string;
+  shorts_output_dir?: string;
   started_at?: string;
   finished_at?: string;
 };
@@ -100,6 +103,41 @@ export async function cutVideo(payload: {
   return response.data;
 }
 
+export async function cutAndPrepareShorts(payload: {
+  video_id: string;
+  mode: "copy" | "accurate";
+  quality: "high" | "very_high" | "lossless";
+  shorts_mode: "fit_padding" | "blur_background" | "crop_fill";
+  shorts_quality: "high" | "very_high" | "lossless";
+  cuts: {
+    start: string;
+    end: string;
+    name?: string;
+  }[];
+}) {
+  const response = await axios.post(
+    `${API_URL}/videos/cut-and-prepare-shorts`,
+    payload
+  );
+  return response.data;
+}
+
+export async function cutToShorts(payload: {
+  video_id: string;
+  mode: "copy" | "accurate";
+  quality: "high" | "very_high" | "lossless";
+  shorts_mode: "fit_padding" | "blur_background" | "crop_fill";
+  shorts_quality: "high" | "very_high" | "lossless";
+  cuts: {
+    start: string;
+    end: string;
+    name?: string;
+  }[];
+}) {
+  const response = await axios.post(`${API_URL}/videos/cut-to-shorts`, payload);
+  return response.data;
+}
+
 export async function detectClips(payload: {
   video_id: string;
   threshold: number;
@@ -137,4 +175,8 @@ export function getApiErrorMessage(error: unknown, fallback: string) {
 
 export function getDownloadUrl(jobId: string) {
   return `${DOWNLOAD_URL}/${jobId}`;
+}
+
+export function getRawDownloadUrl(jobId: string) {
+  return `${DOWNLOAD_URL}/${jobId}/raw`;
 }

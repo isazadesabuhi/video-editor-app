@@ -2,6 +2,9 @@ from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 
 
+ShortMode = Literal["fit_padding", "blur_background", "crop_fill", "manual_crop"]
+
+
 class CropRequest(BaseModel):
     video_id: str
     x: int = Field(ge=0)
@@ -10,8 +13,28 @@ class CropRequest(BaseModel):
     height: int = Field(gt=0)
     quality: Literal["high", "very_high", "lossless"] = "high"
     preset: Optional[
-        Literal["custom", "reels", "shorts", "tiktok", "vertical_from_crop"]
+        Literal[
+            "custom",
+            "reels",
+            "shorts",
+            "tiktok",
+            "vertical_from_crop",
+            "fit_padding",
+            "blur_background",
+            "crop_fill",
+            "manual_crop",
+        ]
     ] = None
+
+
+class MakeShortResponse(BaseModel):
+    original_filename: str
+    original_width: int
+    original_height: int
+    output_filename: str
+    output_path: str
+    selected_mode: ShortMode
+    final_size: str = "1080x1920"
 
 
 class DynamicCropSegment(BaseModel):
@@ -54,6 +77,13 @@ class CutRequest(BaseModel):
     cuts: List[CutRange] = Field(min_length=1, max_length=500)
     mode: Literal["copy", "accurate"] = "copy"
     quality: Literal["high", "very_high", "lossless"] = "high"
+
+
+class CutAndPrepareShortsRequest(CutRequest):
+    shorts_mode: Literal["fit_padding", "blur_background", "crop_fill"] = (
+        "blur_background"
+    )
+    shorts_quality: Literal["high", "very_high", "lossless"] = "high"
 
 
 class DetectClipsRequest(BaseModel):

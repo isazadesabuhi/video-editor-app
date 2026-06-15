@@ -11,6 +11,9 @@ OUTPUT_DIR = BASE_DIR / "storage" / "outputs"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+SHORT_WIDTH = 1080
+SHORT_HEIGHT = 1920
+
 
 def time_to_seconds(time_str: str) -> float:
     """
@@ -69,6 +72,10 @@ def get_crf(quality: str) -> str:
         return "16"
 
     return "18"
+
+
+def ensure_even(value: int) -> int:
+    return value if value % 2 == 0 else value - 1
 
 
 def run_command(command: list[str]) -> None:
@@ -162,6 +169,134 @@ def get_video_dimensions(input_path: Path) -> tuple[int, int]:
         return int(width), int(height)
     except ValueError as error:
         raise RuntimeError("Could not read video dimensions") from error
+
+
+def validate_crop_bounds(
+    source_width: int,
+    source_height: int,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> None:
+    if x < 0 or y < 0:
+        raise ValueError("Crop x and y must be greater than or equal to 0")
+
+    if width <= 0 or height <= 0:
+        raise ValueError("Crop width and height must be greater than 0")
+
+    if x + width > source_width or y + height > source_height:
+        raise ValueError("Crop rectangle is outside the source video bounds")
+
+    if ensure_even(width) <= 0 or ensure_even(height) <= 0:
+        raise ValueError("Crop width and height must be at least 2 pixels")
+
+
+def process_vertical_short(
+    input_path: Path,
+    output_path: Path,
+    mode: str,
+    quality: str = "high",
+    x: int | None = None,
+    y: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> tuple[int, int]:
+    original_width, original_height = get_video_dimensions(input_path)
+    crf = get_crf(quality)
+
+    base_command = ["ffmpeg", "-y", "-i", str(input_path)]
+
+    # Keep the full source visible and add black padding to fit a 9:16 canvas.
+    if mode == "fit_padding":
+        filter_args = [
+            "-vf",
+            (
+                f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=decrease,"
+                f"pad={SHORT_WIDTH}:{SHORT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+            ),
+            "-map",
+            "0:v:0",
+        ]
+
+    # Fill the 9:16 canvas with a blurred copy, then overlay the full source centered.
+    elif mode == "blur_background":
+        filter_args = [
+            "-filter_complex",
+            (
+                f"[0:v]scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
+                f"crop={SHORT_WIDTH}:{SHORT_HEIGHT},boxblur=50:2[bg];"
+                f"[0:v]scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=decrease[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[outv]"
+            ),
+            "-map",
+            "[outv]",
+        ]
+
+    # Fill the entire 9:16 canvas by cropping overflow from the source.
+    elif mode == "crop_fill":
+        filter_args = [
+            "-vf",
+            (
+                f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
+                f"crop={SHORT_WIDTH}:{SHORT_HEIGHT},setsar=1"
+            ),
+            "-map",
+            "0:v:0",
+        ]
+
+    # Crop the user-selected rectangle first, then scale it to the 9:16 output.
+    elif mode == "manual_crop":
+        if x is None or y is None or width is None or height is None:
+            raise ValueError("manual_crop requires x, y, width, and height")
+
+        validate_crop_bounds(
+            source_width=original_width,
+            source_height=original_height,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+        )
+
+        filter_args = [
+            "-vf",
+            (
+                f"crop={ensure_even(width)}:{ensure_even(height)}:{x}:{y},"
+                f"scale={SHORT_WIDTH}:{SHORT_HEIGHT},setsar=1"
+            ),
+            "-map",
+            "0:v:0",
+        ]
+
+    else:
+        raise ValueError(f"Unsupported vertical mode: {mode}")
+
+    command = [
+        *base_command,
+        *filter_args,
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-crf",
+        crf,
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+
+    run_command(command)
+
+    return original_width, original_height
 
 
 def get_scene_boundaries(
