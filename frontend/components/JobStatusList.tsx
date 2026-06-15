@@ -55,11 +55,9 @@ export default function JobStatusList({ jobs, onJobUpdate }: Props) {
 
       <div className="space-y-3">
         {jobs.map((job) => (
-          <div
-            key={job.id}
-            className="flex flex-col gap-3 rounded border p-3 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div>
+          <div key={job.id} className="rounded border p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
               <p className="font-medium">{job.label}</p>
               <p className="text-sm text-gray-600">
                 {job.status === "processing" && "Processing"}
@@ -87,16 +85,34 @@ export default function JobStatusList({ jobs, onJobUpdate }: Props) {
                   </code>
                 </p>
               )}
+              </div>
+
+              {job.status === "done" && (job.output || job.archive) && (
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href={getDownloadUrl(job.id)}
+                    className="w-fit rounded bg-black px-4 py-2 text-sm text-white"
+                  >
+                    Download
+                  </a>
+                </div>
+              )}
             </div>
 
-            {job.status === "done" && (job.output || job.archive) && (
-              <div className="flex flex-wrap gap-2">
-                <a
-                  href={getDownloadUrl(job.id)}
-                  className="w-fit rounded bg-black px-4 py-2 text-sm text-white"
-                >
-                  Download
-                </a>
+            {(job.status === "processing" || job.status === "done") && (
+              <div className="mt-3 space-y-1">
+                <div className="h-2 overflow-hidden rounded bg-gray-200">
+                  <div
+                    className="h-full rounded bg-blue-600 transition-all"
+                    style={{
+                      width: `${job.status === "done" ? 100 : job.progress ?? 0}%`,
+                    }}
+                  />
+                </div>
+                <p className="text-sm text-gray-600">
+                  {job.status === "done" ? 100 : job.progress ?? 0}%
+                  {job.current_step ? ` - ${job.current_step}` : ""}
+                </p>
               </div>
             )}
           </div>

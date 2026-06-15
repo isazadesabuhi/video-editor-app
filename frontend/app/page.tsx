@@ -31,6 +31,8 @@ export default function HomePage() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoId, setVideoId] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubeQuality, setYoutubeQuality] = useState<"720p" | "1080p" | "best">(
     "1080p"
@@ -98,9 +100,19 @@ export default function HomePage() {
   async function handleUpload() {
     if (!file) return;
 
-    const result = await uploadVideo(file);
-    setVideoId(result.video_id);
-    setUploadMessage(`Uploaded ${result.filename}`);
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+      const result = await uploadVideo(file, setUploadProgress);
+      setVideoId(result.video_id);
+      setUploadMessage(`Uploaded ${result.filename}`);
+      setUploadProgress(100);
+    } catch (error) {
+      setUploadMessage(getApiErrorMessage(error, "Could not upload video"));
+    } finally {
+      setIsUploading(false);
+    }
   }
 
   async function handleYouTubeDownload() {
@@ -277,6 +289,8 @@ export default function HomePage() {
 
       <VideoUploadStep
         file={file}
+        isUploading={isUploading}
+        uploadProgress={uploadProgress}
         uploadMessage={uploadMessage}
         onFileChange={handleFileChange}
         onUpload={handleUpload}

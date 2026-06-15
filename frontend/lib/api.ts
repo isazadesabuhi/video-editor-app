@@ -14,6 +14,8 @@ export type JobStatus = {
   raw_archive?: string;
   cut_output_dir?: string;
   shorts_output_dir?: string;
+  progress?: number;
+  current_step?: string;
   started_at?: string;
   finished_at?: string;
 };
@@ -27,13 +29,21 @@ export type DynamicCropSegment = {
   height: number;
 };
 
-export async function uploadVideo(file: File) {
+export async function uploadVideo(
+  file: File,
+  onProgress?: (progress: number) => void
+) {
   const formData = new FormData();
   formData.append("file", file);
 
   const response = await axios.post(`${API_URL}/videos/upload`, formData, {
     headers: {
       "Content-Type": "multipart/form-data",
+    },
+    onUploadProgress: (event) => {
+      if (!event.total || !onProgress) return;
+
+      onProgress(Math.round((event.loaded / event.total) * 100));
     },
   });
 

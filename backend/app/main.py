@@ -189,11 +189,15 @@ def crop_video_endpoint(payload: CropRequest, background_tasks: BackgroundTasks)
     JOBS[job_id] = {
         "status": "processing",
         "output": str(output_path),
+        "progress": 0,
+        "current_step": "Waiting to start crop",
         "started_at": utc_now(),
     }
 
     def task():
         try:
+            set_job_progress(job_id, 10, "Processing crop")
+
             if payload.preset in [
                 "fit_padding",
                 "blur_background",
@@ -238,6 +242,7 @@ def crop_video_endpoint(payload: CropRequest, background_tasks: BackgroundTasks)
                 )
 
             JOBS[job_id]["status"] = "done"
+            set_job_progress(job_id, 100, "Crop finished")
             JOBS[job_id]["finished_at"] = utc_now()
 
         except Exception as error:
@@ -284,11 +289,15 @@ def dynamic_crop_endpoint(payload: DynamicCropRequest, background_tasks: Backgro
     JOBS[job_id] = {
         "status": "processing",
         "output": str(output_path),
+        "progress": 0,
+        "current_step": "Waiting to start dynamic crop",
         "started_at": utc_now(),
     }
 
     def task():
         try:
+            set_job_progress(job_id, 10, "Processing dynamic crop")
+
             export_dynamic_crop_video(
                 input_path=input_path,
                 output_path=output_path,
@@ -299,6 +308,7 @@ def dynamic_crop_endpoint(payload: DynamicCropRequest, background_tasks: Backgro
             )
 
             JOBS[job_id]["status"] = "done"
+            set_job_progress(job_id, 100, "Dynamic crop finished")
             JOBS[job_id]["finished_at"] = utc_now()
 
         except Exception as error:
@@ -326,17 +336,25 @@ def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
     JOBS[job_id] = {
         "status": "processing",
         "outputs": [],
+        "progress": 0,
+        "current_step": "Waiting to start cuts",
         "started_at": utc_now(),
     }
 
     def task():
         try:
             used_names: set[str] = set()
+            total_cuts = len(payload.cuts)
 
             for index, cut in enumerate(payload.cuts, start=1):
                 safe_name = sanitize_filename(cut.name, f"clip_{index}")
                 safe_name = make_unique_name(safe_name, used_names)
                 output_path = job_output_dir / f"{safe_name}.mp4"
+                set_job_progress(
+                    job_id,
+                    round(((index - 1) / total_cuts) * 95),
+                    f"Cutting clip {index} of {total_cuts}",
+                )
 
                 if payload.mode == "accurate":
                     cut_video_accurate(
@@ -355,12 +373,19 @@ def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
                     )
 
                 JOBS[job_id]["outputs"].append(str(output_path))
+                set_job_progress(
+                    job_id,
+                    round((index / total_cuts) * 95),
+                    f"Finished clip {index} of {total_cuts}",
+                )
 
+            set_job_progress(job_id, 96, "Creating clip archive")
             zip_path = OUTPUT_DIR / f"{job_id}_clips.zip"
             create_zip_archive(zip_path, [Path(output) for output in JOBS[job_id]["outputs"]])
 
             JOBS[job_id]["archive"] = str(zip_path)
             JOBS[job_id]["status"] = "done"
+            set_job_progress(job_id, 100, "Cut export finished")
             JOBS[job_id]["finished_at"] = utc_now()
 
         except Exception as error:
@@ -397,18 +422,27 @@ def cut_and_prepare_shorts_endpoint(
         "shorts_outputs": [],
         "cut_output_dir": str(cut_output_dir),
         "shorts_output_dir": str(shorts_output_dir),
+        "progress": 0,
+        "current_step": "Waiting to start cuts",
         "started_at": utc_now(),
     }
 
     def task():
         try:
             used_names: set[str] = set()
+            total_steps = len(payload.cuts) * 2
+            completed_steps = 0
 
             for index, cut in enumerate(payload.cuts, start=1):
                 safe_name = sanitize_filename(cut.name, f"clip_{index}")
                 safe_name = make_unique_name(safe_name, used_names)
                 cut_output_path = cut_output_dir / f"{safe_name}.mp4"
                 shorts_output_path = shorts_output_dir / f"{safe_name}_short.mp4"
+                set_job_progress(
+                    job_id,
+                    round((completed_steps / total_steps) * 100),
+                    f"Cutting clip {index} of {len(payload.cuts)}",
+                )
 
                 if payload.mode == "accurate":
                     cut_video_accurate(
@@ -426,6 +460,13 @@ def cut_and_prepare_shorts_endpoint(
                         end=cut.end,
                     )
 
+                completed_steps += 1
+                set_job_progress(
+                    job_id,
+                    round((completed_steps / total_steps) * 100),
+                    f"Preparing Shorts clip {index} of {len(payload.cuts)}",
+                )
+
                 process_vertical_short(
                     input_path=cut_output_path,
                     output_path=shorts_output_path,
@@ -435,8 +476,15 @@ def cut_and_prepare_shorts_endpoint(
 
                 JOBS[job_id]["cut_outputs"].append(str(cut_output_path))
                 JOBS[job_id]["shorts_outputs"].append(str(shorts_output_path))
+                completed_steps += 1
+                set_job_progress(
+                    job_id,
+                    round((completed_steps / total_steps) * 100),
+                    f"Finished Shorts clip {index} of {len(payload.cuts)}",
+                )
 
             JOBS[job_id]["status"] = "done"
+            set_job_progress(job_id, 100, "Cut and Shorts preparation finished")
             JOBS[job_id]["finished_at"] = utc_now()
 
         except Exception as error:
@@ -469,12 +517,16 @@ def cut_to_shorts_endpoint(
         "status": "processing",
         "shorts_outputs": [],
         "shorts_output_dir": str(shorts_output_dir),
+        "progress": 0,
+        "current_step": "Waiting to start Shorts",
         "started_at": utc_now(),
     }
 
     def task():
         try:
             used_names: set[str] = set()
+            total_steps = len(payload.cuts) * 2
+            completed_steps = 0
 
             with tempfile.TemporaryDirectory(prefix=f"{job_id}_cuts_") as temp_dir:
                 temp_path = Path(temp_dir)
@@ -484,6 +536,11 @@ def cut_to_shorts_endpoint(
                     safe_name = make_unique_name(safe_name, used_names)
                     temp_cut_path = temp_path / f"{safe_name}.mp4"
                     shorts_output_path = shorts_output_dir / f"{safe_name}_short.mp4"
+                    set_job_progress(
+                        job_id,
+                        round((completed_steps / total_steps) * 100),
+                        f"Cutting temporary clip {index} of {len(payload.cuts)}",
+                    )
 
                     if payload.mode == "accurate":
                         cut_video_accurate(
@@ -501,6 +558,13 @@ def cut_to_shorts_endpoint(
                             end=cut.end,
                         )
 
+                    completed_steps += 1
+                    set_job_progress(
+                        job_id,
+                        round((completed_steps / total_steps) * 100),
+                        f"Preparing Shorts clip {index} of {len(payload.cuts)}",
+                    )
+
                     process_vertical_short(
                         input_path=temp_cut_path,
                         output_path=shorts_output_path,
@@ -509,8 +573,15 @@ def cut_to_shorts_endpoint(
                     )
 
                     JOBS[job_id]["shorts_outputs"].append(str(shorts_output_path))
+                    completed_steps += 1
+                    set_job_progress(
+                        job_id,
+                        round((completed_steps / total_steps) * 100),
+                        f"Finished Shorts clip {index} of {len(payload.cuts)}",
+                    )
 
             JOBS[job_id]["status"] = "done"
+            set_job_progress(job_id, 100, "Shorts-only preparation finished")
             JOBS[job_id]["finished_at"] = utc_now()
 
         except Exception as error:
@@ -618,6 +689,16 @@ def dump_schema(schema):
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def set_job_progress(job_id: str, progress: int, current_step: str) -> None:
+    job = JOBS.get(job_id)
+
+    if not job:
+        return
+
+    job["progress"] = max(0, min(100, progress))
+    job["current_step"] = current_step
 
 
 def refresh_job_status(job: dict) -> None:
