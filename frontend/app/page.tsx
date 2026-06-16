@@ -107,7 +107,11 @@ export default function HomePage() {
     try {
       const result = await uploadVideo(file, setUploadProgress);
       setVideoId(result.video_id);
-      setUploadMessage(`Uploaded ${result.filename}`);
+      setUploadMessage(
+        result.duplicate
+          ? `Already uploaded. Using ${result.filename}`
+          : `Uploaded ${result.filename}`
+      );
       setUploadProgress(100);
     } catch (error) {
       setUploadMessage(getApiErrorMessage(error, "Could not upload video"));

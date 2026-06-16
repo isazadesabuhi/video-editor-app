@@ -5,6 +5,7 @@ import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from re import sub
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -69,21 +70,47 @@ async def upload_video(file: UploadFile = File(...)):
 
     video_id = str(uuid.uuid4())
     suffix = Path(file.filename or "video.mp4").suffix or ".mp4"
+    temp_path = UPLOAD_DIR / f"{video_id}.uploading{suffix}"
     saved_path = UPLOAD_DIR / f"{video_id}{suffix}"
 
-    with saved_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    file_hash = save_upload_with_hash(file, temp_path)
+
+    duplicate = find_duplicate_upload(file_hash, temp_path)
+
+    if duplicate:
+        temp_path.unlink(missing_ok=True)
+
+        return {
+            "video_id": duplicate["video_id"],
+            "filename": duplicate["filename"],
+            "original_width": duplicate["original_width"],
+            "original_height": duplicate["original_height"],
+            "duplicate": True,
+            "message": "Video already uploaded. Using existing file.",
+        }
+
+    temp_path.replace(saved_path)
 
     try:
         original_width, original_height = get_video_dimensions(saved_path)
     except Exception as error:
+        saved_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+    register_uploaded_video(
+        video_id=video_id,
+        saved_path=saved_path,
+        file_hash=file_hash,
+        original_width=original_width,
+        original_height=original_height,
+    )
 
     return {
         "video_id": video_id,
         "filename": saved_path.name,
         "original_width": original_width,
         "original_height": original_height,
+        "duplicate": False,
         "message": "Video uploaded successfully",
     }
 
@@ -923,6 +950,98 @@ def find_uploaded_video(video_id: str) -> Path:
         raise HTTPException(status_code=404, detail="Video not found")
 
     return matches[0]
+
+
+def save_upload_with_hash(file: UploadFile, output_path: Path) -> str:
+    hasher = sha256()
+
+    with output_path.open("wb") as buffer:
+        while chunk := file.file.read(1024 * 1024):
+            hasher.update(chunk)
+            buffer.write(chunk)
+
+    return hasher.hexdigest()
+
+
+def register_uploaded_video(
+    video_id: str,
+    saved_path: Path,
+    file_hash: str,
+    original_width: int,
+    original_height: int,
+) -> None:
+    index = read_upload_index()
+    index[file_hash] = {
+        "video_id": video_id,
+        "filename": saved_path.name,
+        "path": str(saved_path),
+        "original_width": original_width,
+        "original_height": original_height,
+        "uploaded_at": utc_now(),
+    }
+    write_upload_index(index)
+
+
+def find_duplicate_upload(file_hash: str, new_upload_path: Path) -> dict | None:
+    index = read_upload_index()
+    indexed_upload = index.get(file_hash)
+
+    if indexed_upload:
+        indexed_path = Path(indexed_upload.get("path", ""))
+
+        if indexed_path.exists():
+            return indexed_upload
+
+    for upload_path in UPLOAD_DIR.iterdir():
+        if (
+            not upload_path.is_file()
+            or upload_path == new_upload_path
+            or upload_path.name == "upload_index.json"
+            or ".uploading" in upload_path.name
+        ):
+            continue
+
+        if hash_file(upload_path) != file_hash:
+            continue
+
+        video_id = upload_path.stem
+
+        try:
+            original_width, original_height = get_video_dimensions(upload_path)
+        except Exception:
+            original_width, original_height = 0, 0
+
+        duplicate = {
+            "video_id": video_id,
+            "filename": upload_path.name,
+            "path": str(upload_path),
+            "original_width": original_width,
+            "original_height": original_height,
+            "uploaded_at": utc_now(),
+        }
+        index[file_hash] = duplicate
+        write_upload_index(index)
+        return duplicate
+
+    return None
+
+
+def hash_file(path: Path) -> str:
+    hasher = sha256()
+
+    with path.open("rb") as file:
+        while chunk := file.read(1024 * 1024):
+            hasher.update(chunk)
+
+    return hasher.hexdigest()
+
+
+def read_upload_index() -> dict:
+    return read_json_file(UPLOAD_DIR / "upload_index.json")
+
+
+def write_upload_index(index: dict) -> None:
+    write_json_file(UPLOAD_DIR / "upload_index.json", index)
 
 
 def dump_schema(schema):
