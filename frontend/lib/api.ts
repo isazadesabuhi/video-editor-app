@@ -16,6 +16,12 @@ export type JobStatus = {
   shorts_output_dir?: string;
   progress?: number;
   current_step?: string;
+  compilation_dir?: string;
+  shorts_dir?: string;
+  manifest_path?: string;
+  final_outputs?: string[];
+  generated_shorts_count?: number;
+  skipped_clips_count?: number;
   started_at?: string;
   finished_at?: string;
 };
@@ -27,6 +33,27 @@ export type DynamicCropSegment = {
   y: number;
   width: number;
   height: number;
+};
+
+export type ShortsClip = {
+  job_id: string;
+  filename: string;
+  path: string;
+  cut?: {
+    start?: string;
+    end?: string;
+    name?: string;
+  };
+};
+
+export type ShortsLibraryJob = {
+  job_id: string;
+  shorts_output_dir: string;
+  manifest_path?: string | null;
+  source_video?: string | null;
+  shorts_mode?: string | null;
+  clip_count: number;
+  clips: ShortsClip[];
 };
 
 export async function uploadVideo(
@@ -168,6 +195,63 @@ export async function getJob(jobId: string) {
     },
   });
   return response.data;
+}
+
+export async function getShortsLibrary() {
+  const response = await axios.get(`${API_URL}/shorts-library`, {
+    params: {
+      t: Date.now(),
+    },
+  });
+  return response.data as {
+    jobs: ShortsLibraryJob[];
+    total_jobs: number;
+    total_clips: number;
+  };
+}
+
+export async function createShortsCompilationDraft(payload: {
+  clip_count: number;
+  source_job_ids?: string[];
+  title?: string;
+}) {
+  const response = await axios.post(
+    `${API_URL}/shorts-compilations/draft`,
+    payload
+  );
+  return response.data as {
+    compilation_id: string;
+    selected_count: number;
+    selected_dir: string;
+    manifest_path: string;
+    final_output: string;
+    clips: {
+      order: number;
+      source_job_id: string;
+      source_filename: string;
+      selected_filename: string;
+      selected_path: string;
+    }[];
+  };
+}
+
+export async function generateShortsCompilation(payload: {
+  min_duration_seconds: number;
+  max_duration_seconds: number;
+  min_clips_per_short: number;
+  max_shorts: number;
+  source_job_ids?: string[];
+  title?: string;
+}) {
+  const response = await axios.post(
+    `${API_URL}/shorts-compilations/generate`,
+    payload
+  );
+  return response.data as {
+    job_id: string;
+    status: "processing";
+    message: string;
+  };
 }
 
 export function getApiErrorMessage(error: unknown, fallback: string) {

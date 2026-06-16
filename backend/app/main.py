@@ -1,3 +1,5 @@
+import json
+import random
 import shutil
 import tempfile
 import time
@@ -11,12 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.schemas import (
+    CreateShortsCompilationRequest,
     CutAndPrepareShortsRequest,
     CropRequest,
     CutRequest,
     DetectDynamicCropsRequest,
     DetectClipsRequest,
     DynamicCropRequest,
+    GenerateShortsCompilationRequest,
     MakeShortResponse,
     ShortMode,
     YouTubeDownloadRequest,
@@ -32,8 +36,10 @@ from app.services.ffmpeg_service import (
     detect_dynamic_crop_segments,
     detect_scene_clips,
     export_dynamic_crop_video,
+    get_video_duration,
     get_video_dimensions,
     process_vertical_short,
+    run_command,
 )
 
 
@@ -486,6 +492,20 @@ def cut_and_prepare_shorts_endpoint(
             JOBS[job_id]["status"] = "done"
             set_job_progress(job_id, 100, "Cut and Shorts preparation finished")
             JOBS[job_id]["finished_at"] = utc_now()
+            write_shorts_job_manifest(
+                job_id=job_id,
+                input_path=input_path,
+                job_output_dir=job_output_dir,
+                shorts_output_dir=shorts_output_dir,
+                cuts=[dump_schema(cut) for cut in payload.cuts],
+                shorts_outputs=[
+                    Path(output) for output in JOBS[job_id]["shorts_outputs"]
+                ],
+                cut_output_dir=cut_output_dir,
+                cut_outputs=[Path(output) for output in JOBS[job_id]["cut_outputs"]],
+                shorts_mode=payload.shorts_mode,
+                shorts_quality=payload.shorts_quality,
+            )
 
         except Exception as error:
             JOBS[job_id]["status"] = "failed"
@@ -583,6 +603,18 @@ def cut_to_shorts_endpoint(
             JOBS[job_id]["status"] = "done"
             set_job_progress(job_id, 100, "Shorts-only preparation finished")
             JOBS[job_id]["finished_at"] = utc_now()
+            write_shorts_job_manifest(
+                job_id=job_id,
+                input_path=input_path,
+                job_output_dir=job_output_dir,
+                shorts_output_dir=shorts_output_dir,
+                cuts=[dump_schema(cut) for cut in payload.cuts],
+                shorts_outputs=[
+                    Path(output) for output in JOBS[job_id]["shorts_outputs"]
+                ],
+                shorts_mode=payload.shorts_mode,
+                shorts_quality=payload.shorts_quality,
+            )
 
         except Exception as error:
             JOBS[job_id]["status"] = "failed"
@@ -615,6 +647,219 @@ def detect_clips_endpoint(payload: DetectClipsRequest):
     return {
         "clips": clips,
         "count": len(clips),
+    }
+
+
+@app.get("/shorts-library")
+def list_shorts_library():
+    jobs = list_shorts_jobs()
+
+    return {
+        "jobs": jobs,
+        "total_jobs": len(jobs),
+        "total_clips": sum(len(job["clips"]) for job in jobs),
+    }
+
+
+@app.post("/shorts-compilations/draft")
+def create_shorts_compilation_draft(payload: CreateShortsCompilationRequest):
+    clips = list_shorts_clips(payload.source_job_ids)
+
+    if not clips:
+        raise HTTPException(status_code=400, detail="No shorts clips were found")
+
+    selected_count = min(payload.clip_count, len(clips))
+    selected_clips = random.sample(clips, selected_count)
+
+    compilation_id = str(uuid.uuid4())
+    compilation_dir = OUTPUT_DIR / "compilations" / compilation_id
+    selected_dir = compilation_dir / "selected_clips"
+    selected_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_clips = []
+    for index, clip in enumerate(selected_clips, start=1):
+        source_path = Path(clip["path"])
+        output_filename = (
+            f"{index:03d}_{sanitize_filename(clip['job_id'], 'job')}_"
+            f"{sanitize_filename(source_path.stem, f'clip_{index}')}.mp4"
+        )
+        output_path = selected_dir / output_filename
+        shutil.copy2(source_path, output_path)
+
+        manifest_clips.append(
+            {
+                "order": index,
+                "source_job_id": clip["job_id"],
+                "source_filename": source_path.name,
+                "source_path": str(source_path),
+                "selected_filename": output_filename,
+                "selected_path": str(output_path),
+            }
+        )
+
+    manifest = {
+        "compilation_id": compilation_id,
+        "title": payload.title or f"shorts_compilation_{compilation_id}",
+        "created_at": utc_now(),
+        "status": "draft",
+        "selected_dir": str(selected_dir),
+        "final_output": str(compilation_dir / "final.mp4"),
+        "clips": manifest_clips,
+    }
+    manifest_path = compilation_dir / "manifest.json"
+    write_json_file(manifest_path, manifest)
+
+    return {
+        "compilation_id": compilation_id,
+        "selected_count": selected_count,
+        "selected_dir": str(selected_dir),
+        "manifest_path": str(manifest_path),
+        "final_output": str(compilation_dir / "final.mp4"),
+        "clips": manifest_clips,
+    }
+
+
+@app.post("/shorts-compilations/generate")
+def generate_shorts_compilations_endpoint(
+    payload: GenerateShortsCompilationRequest,
+    background_tasks: BackgroundTasks,
+):
+    if payload.min_duration_seconds > payload.max_duration_seconds:
+        raise HTTPException(
+            status_code=400,
+            detail="Minimum duration cannot be greater than maximum duration",
+        )
+
+    clips = list_shorts_clips(payload.source_job_ids)
+
+    if not clips:
+        raise HTTPException(status_code=400, detail="No shorts clips were found")
+
+    job_id = str(uuid.uuid4())
+    compilation_dir = OUTPUT_DIR / "compilations" / job_id
+    compilation_dir.mkdir(parents=True, exist_ok=True)
+
+    JOBS[job_id] = {
+        "status": "processing",
+        "progress": 0,
+        "current_step": "Waiting to generate final Shorts",
+        "compilation_dir": str(compilation_dir),
+        "final_outputs": [],
+        "started_at": utc_now(),
+    }
+
+    def task():
+        try:
+            set_job_progress(job_id, 5, "Reading clip durations")
+            eligible_clips, skipped_clips = collect_eligible_shorts_clips(
+                clips,
+                max_duration_seconds=payload.max_duration_seconds,
+            )
+
+            groups, unused_clips = build_random_shorts_groups(
+                eligible_clips,
+                min_duration_seconds=payload.min_duration_seconds,
+                max_duration_seconds=payload.max_duration_seconds,
+                min_clips_per_short=payload.min_clips_per_short,
+                max_shorts=payload.max_shorts,
+            )
+            skipped_clips.extend(unused_clips)
+
+            if not groups:
+                raise RuntimeError(
+                    "Could not build any Shorts with the selected duration and minimum clip rules"
+                )
+
+            shorts_dir = compilation_dir / "shorts"
+            shorts_dir.mkdir(parents=True, exist_ok=True)
+            manifest_shorts = []
+            total_groups = len(groups)
+
+            for group_index, group in enumerate(groups, start=1):
+                set_job_progress(
+                    job_id,
+                    10 + round(((group_index - 1) / total_groups) * 85),
+                    f"Creating final Short {group_index} of {total_groups}",
+                )
+                short_dir = shorts_dir / f"short_{group_index:03d}"
+                selected_dir = short_dir / "selected_clips"
+                selected_dir.mkdir(parents=True, exist_ok=True)
+                selected_paths = []
+                selected_manifest = []
+
+                for clip_index, clip in enumerate(group["clips"], start=1):
+                    source_path = Path(clip["path"])
+                    output_filename = (
+                        f"{clip_index:03d}_{sanitize_filename(clip['job_id'], 'job')}_"
+                        f"{sanitize_filename(source_path.stem, f'clip_{clip_index}')}.mp4"
+                    )
+                    output_path = selected_dir / output_filename
+                    shutil.copy2(source_path, output_path)
+                    selected_paths.append(output_path)
+                    selected_manifest.append(
+                        {
+                            "order": clip_index,
+                            "source_job_id": clip["job_id"],
+                            "source_filename": source_path.name,
+                            "source_path": str(source_path),
+                            "selected_filename": output_filename,
+                            "selected_path": str(output_path),
+                            "duration_seconds": clip["duration_seconds"],
+                        }
+                    )
+
+                final_output = short_dir / "final.mp4"
+                concatenate_video_files(selected_paths, final_output)
+                JOBS[job_id]["final_outputs"].append(str(final_output))
+                manifest_shorts.append(
+                    {
+                        "index": group_index,
+                        "duration_seconds": group["duration_seconds"],
+                        "clip_count": len(group["clips"]),
+                        "selected_dir": str(selected_dir),
+                        "final_output": str(final_output),
+                        "clips": selected_manifest,
+                    }
+                )
+
+            manifest = {
+                "compilation_id": job_id,
+                "title": payload.title or f"shorts_compilation_{job_id}",
+                "created_at": utc_now(),
+                "status": "generated",
+                "rules": {
+                    "min_duration_seconds": payload.min_duration_seconds,
+                    "max_duration_seconds": payload.max_duration_seconds,
+                    "min_clips_per_short": payload.min_clips_per_short,
+                    "max_shorts": payload.max_shorts,
+                },
+                "compilation_dir": str(compilation_dir),
+                "shorts_dir": str(shorts_dir),
+                "shorts": manifest_shorts,
+                "skipped_clips": skipped_clips,
+            }
+            manifest_path = compilation_dir / "manifest.json"
+            write_json_file(manifest_path, manifest)
+
+            JOBS[job_id]["manifest_path"] = str(manifest_path)
+            JOBS[job_id]["shorts_dir"] = str(shorts_dir)
+            JOBS[job_id]["generated_shorts_count"] = len(manifest_shorts)
+            JOBS[job_id]["skipped_clips_count"] = len(skipped_clips)
+            JOBS[job_id]["status"] = "done"
+            set_job_progress(job_id, 100, "Final Shorts generated")
+            JOBS[job_id]["finished_at"] = utc_now()
+
+        except Exception as error:
+            JOBS[job_id]["status"] = "failed"
+            JOBS[job_id]["error"] = str(error)
+            JOBS[job_id]["finished_at"] = utc_now()
+
+    background_tasks.add_task(task)
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "message": "Final Shorts generation job started",
     }
 
 
@@ -699,6 +944,284 @@ def set_job_progress(job_id: str, progress: int, current_step: str) -> None:
 
     job["progress"] = max(0, min(100, progress))
     job["current_step"] = current_step
+
+
+def write_shorts_job_manifest(
+    job_id: str,
+    input_path: Path,
+    job_output_dir: Path,
+    shorts_output_dir: Path,
+    cuts: list[dict],
+    shorts_outputs: list[Path],
+    shorts_mode: str,
+    shorts_quality: str,
+    cut_output_dir: Path | None = None,
+    cut_outputs: list[Path] | None = None,
+) -> None:
+    clips = []
+
+    for index, shorts_output in enumerate(shorts_outputs, start=1):
+        clip = {
+            "index": index,
+            "filename": shorts_output.name,
+            "path": str(shorts_output),
+        }
+
+        if index - 1 < len(cuts):
+            clip["cut"] = cuts[index - 1]
+
+        if cut_outputs and index - 1 < len(cut_outputs):
+            clip["raw_cut_filename"] = cut_outputs[index - 1].name
+            clip["raw_cut_path"] = str(cut_outputs[index - 1])
+
+        clips.append(clip)
+
+    manifest = {
+        "job_id": job_id,
+        "source_video": str(input_path),
+        "created_at": utc_now(),
+        "shorts_mode": shorts_mode,
+        "shorts_quality": shorts_quality,
+        "cut_output_dir": str(cut_output_dir) if cut_output_dir else None,
+        "shorts_output_dir": str(shorts_output_dir),
+        "cuts": cuts,
+        "clips": clips,
+    }
+    manifest_path = job_output_dir / "source_info.json"
+    write_json_file(manifest_path, manifest)
+
+    if job_id in JOBS:
+        JOBS[job_id]["manifest_path"] = str(manifest_path)
+
+
+def list_shorts_jobs() -> list[dict]:
+    jobs = []
+
+    if not OUTPUT_DIR.exists():
+        return jobs
+
+    for job_dir in sorted(OUTPUT_DIR.iterdir(), key=lambda path: path.name):
+        if not job_dir.is_dir() or job_dir.name == "compilations":
+            continue
+
+        shorts_output_dir = job_dir / "shorts_clips"
+
+        if not shorts_output_dir.exists():
+            continue
+
+        clips = []
+        manifest_path = job_dir / "source_info.json"
+        manifest = read_json_file(manifest_path) if manifest_path.exists() else {}
+        manifest_clips = {
+            clip.get("filename"): clip
+            for clip in manifest.get("clips", [])
+            if isinstance(clip, dict)
+        }
+
+        for clip_path in sorted(shorts_output_dir.glob("*.mp4")):
+            manifest_clip = manifest_clips.get(clip_path.name, {})
+            clips.append(
+                {
+                    "job_id": job_dir.name,
+                    "filename": clip_path.name,
+                    "path": str(clip_path),
+                    "cut": manifest_clip.get("cut"),
+                }
+            )
+
+        jobs.append(
+            {
+                "job_id": job_dir.name,
+                "shorts_output_dir": str(shorts_output_dir),
+                "manifest_path": str(manifest_path) if manifest_path.exists() else None,
+                "source_video": manifest.get("source_video"),
+                "shorts_mode": manifest.get("shorts_mode"),
+                "clip_count": len(clips),
+                "clips": clips,
+            }
+        )
+
+    return jobs
+
+
+def list_shorts_clips(source_job_ids: list[str] | None = None) -> list[dict]:
+    allowed_job_ids = set(source_job_ids or [])
+    clips = []
+
+    for job in list_shorts_jobs():
+        if allowed_job_ids and job["job_id"] not in allowed_job_ids:
+            continue
+
+        clips.extend(job["clips"])
+
+    return clips
+
+
+def collect_eligible_shorts_clips(
+    clips: list[dict],
+    max_duration_seconds: int,
+) -> tuple[list[dict], list[dict]]:
+    eligible_clips = []
+    skipped_clips = []
+
+    for clip in clips:
+        clip_path = Path(clip["path"])
+
+        if not clip_path.exists():
+            skipped_clips.append({**clip, "reason": "file_missing"})
+            continue
+
+        try:
+            duration = get_video_duration(clip_path)
+        except Exception:
+            skipped_clips.append({**clip, "reason": "duration_unreadable"})
+            continue
+
+        clip_with_duration = {
+            **clip,
+            "duration_seconds": round(duration, 3),
+        }
+
+        if duration <= 0:
+            skipped_clips.append({**clip_with_duration, "reason": "empty_clip"})
+            continue
+
+        if duration > max_duration_seconds:
+            skipped_clips.append(
+                {**clip_with_duration, "reason": "longer_than_max_duration"}
+            )
+            continue
+
+        eligible_clips.append(clip_with_duration)
+
+    random.shuffle(eligible_clips)
+    return eligible_clips, skipped_clips
+
+
+def build_random_shorts_groups(
+    clips: list[dict],
+    min_duration_seconds: int,
+    max_duration_seconds: int,
+    min_clips_per_short: int,
+    max_shorts: int,
+) -> tuple[list[dict], list[dict]]:
+    remaining_clips = clips[:]
+    groups = []
+    unused_clips = []
+
+    while remaining_clips and len(groups) < max_shorts:
+        group_clips = []
+        group_duration = 0.0
+
+        while remaining_clips and (
+            len(group_clips) < min_clips_per_short
+            or group_duration < min_duration_seconds
+        ):
+            fit_index = next(
+                (
+                    index
+                    for index, clip in enumerate(remaining_clips)
+                    if group_duration + clip["duration_seconds"]
+                    <= max_duration_seconds
+                ),
+                None,
+            )
+
+            if fit_index is None:
+                break
+
+            clip = remaining_clips.pop(fit_index)
+            group_clips.append(clip)
+            group_duration += clip["duration_seconds"]
+
+        if (
+            len(group_clips) >= min_clips_per_short
+            and group_duration >= min_duration_seconds
+            and group_duration <= max_duration_seconds
+        ):
+            groups.append(
+                {
+                    "clips": group_clips,
+                    "duration_seconds": round(group_duration, 3),
+                }
+            )
+        else:
+            unused_clips.extend(
+                {**clip, "reason": "could_not_fit_rules"} for clip in group_clips
+            )
+            break
+
+    unused_clips.extend(
+        {**clip, "reason": "left_over_after_grouping"} for clip in remaining_clips
+    )
+
+    return groups, unused_clips
+
+
+def concatenate_video_files(input_paths: list[Path], output_path: Path) -> None:
+    concat_file = output_path.parent / "concat.txt"
+    concat_file.write_text(
+        "".join(f"file '{path.resolve().as_posix()}'\n" for path in input_paths),
+        encoding="utf-8",
+    )
+
+    copy_command = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_file),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+
+    try:
+        run_command(copy_command)
+    except RuntimeError:
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-c:v",
+                "libx264",
+                "-crf",
+                "18",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )
+
+
+def write_json_file(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def read_json_file(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def refresh_job_status(job: dict) -> None:

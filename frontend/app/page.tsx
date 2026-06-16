@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import CropEditor from "@/components/CropEditor";
 import CutListEditor from "@/components/CutListEditor";
 import JobStatusList from "@/components/JobStatusList";
+import ShortsCompilationPlanner from "@/components/ShortsCompilationPlanner";
 import VideoUploadStep from "@/components/VideoUploadStep";
 import {
   cropVideo,
@@ -602,6 +603,8 @@ export default function HomePage() {
       )}
 
       <JobStatusList jobs={jobs} onJobUpdate={updateJob} />
+
+      <ShortsCompilationPlanner onJobStarted={addJob} />
     </main>
   );
 }

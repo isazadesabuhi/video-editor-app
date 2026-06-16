@@ -85,7 +85,38 @@ export default function JobStatusList({ jobs, onJobUpdate }: Props) {
                   </code>
                 </p>
               )}
-              </div>
+
+              {job.status === "done" && job.compilation_dir && (
+                <p className="mt-2 text-sm text-gray-600">
+                  Compilation:{" "}
+                  <code className="rounded bg-gray-100 px-1">
+                    {job.compilation_dir}
+                  </code>
+                </p>
+              )}
+
+              {job.status === "done" && job.shorts_dir && (
+                <p className="mt-1 text-sm text-gray-600">
+                  Final Shorts:{" "}
+                  <code className="rounded bg-gray-100 px-1">
+                    {job.shorts_dir}
+                  </code>
+                </p>
+              )}
+
+              {job.status === "done" &&
+                typeof job.generated_shorts_count === "number" && (
+                  <p className="mt-1 text-sm text-gray-600">
+                    Generated {job.generated_shorts_count} final Short
+                    {job.generated_shorts_count === 1 ? "" : "s"}
+                    {typeof job.skipped_clips_count === "number"
+                      ? `, skipped ${job.skipped_clips_count} clip${
+                          job.skipped_clips_count === 1 ? "" : "s"
+                        }`
+                      : ""}
+                  </p>
+                )}
+            </div>
 
               {job.status === "done" && (job.output || job.archive) && (
                 <div className="flex flex-wrap gap-2">

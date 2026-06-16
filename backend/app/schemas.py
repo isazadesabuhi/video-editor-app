@@ -86,6 +86,21 @@ class CutAndPrepareShortsRequest(CutRequest):
     shorts_quality: Literal["high", "very_high", "lossless"] = "high"
 
 
+class CreateShortsCompilationRequest(BaseModel):
+    clip_count: int = Field(default=5, ge=1, le=100)
+    source_job_ids: Optional[List[str]] = None
+    title: Optional[str] = Field(default=None, max_length=120)
+
+
+class GenerateShortsCompilationRequest(BaseModel):
+    min_duration_seconds: int = Field(default=15, ge=1, le=3600)
+    max_duration_seconds: int = Field(default=60, ge=1, le=3600)
+    min_clips_per_short: int = Field(default=2, ge=1, le=100)
+    max_shorts: int = Field(default=10, ge=1, le=100)
+    source_job_ids: Optional[List[str]] = None
+    title: Optional[str] = Field(default=None, max_length=120)
+
+
 class DetectClipsRequest(BaseModel):
     video_id: str
     threshold: float = Field(default=0.35, ge=0.05, le=1)
