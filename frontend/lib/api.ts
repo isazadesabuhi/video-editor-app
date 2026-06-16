@@ -22,6 +22,9 @@ export type JobStatus = {
   final_outputs?: string[];
   generated_shorts_count?: number;
   skipped_clips_count?: number;
+  video_id?: string;
+  filename?: string;
+  title?: string;
   started_at?: string;
   finished_at?: string;
 };

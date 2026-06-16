@@ -62,11 +62,19 @@ export default function JobStatusList({ jobs, onJobUpdate }: Props) {
               <p className="text-sm text-gray-600">
                 {job.status === "processing" && "Processing"}
                 {job.status === "done" &&
-                  (job.cut_output_dir || job.shorts_output_dir
+                  (job.video_id
+                    ? "Ready to edit"
+                    : job.cut_output_dir || job.shorts_output_dir
                     ? "Ready in output folders"
                     : "Ready to download")}
                 {job.status === "failed" && (job.error || "Export failed")}
               </p>
+
+              {job.status === "done" && job.video_id && (
+                <p className="mt-2 text-sm text-gray-600">
+                  Video: {job.title || job.filename || job.video_id}
+                </p>
+              )}
 
               {job.status === "done" && job.cut_output_dir && (
                 <p className="mt-2 text-sm text-gray-600">

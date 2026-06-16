@@ -162,43 +162,95 @@ async def make_short_video(
 
 
 @app.post("/videos/youtube")
-def download_youtube_video(payload: YouTubeDownloadRequest):
+def download_youtube_video(
+    payload: YouTubeDownloadRequest,
+    background_tasks: BackgroundTasks,
+):
     video_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
     output_template = str(UPLOAD_DIR / f"{video_id}.%(ext)s")
 
-    try:
-        import yt_dlp
-    except ImportError as error:
-        raise HTTPException(
-            status_code=500,
-            detail="yt-dlp is not installed. Run pip install -r requirements.txt.",
-        ) from error
-
-    ydl_opts = {
-        "format": get_youtube_format(payload.quality),
-        "outtmpl": output_template,
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
+    JOBS[job_id] = {
+        "status": "processing",
+        "progress": 0,
+        "current_step": "Waiting to start YouTube download",
+        "video_id": video_id,
+        "started_at": utc_now(),
     }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as downloader:
-            info = downloader.extract_info(payload.url, download=True)
-    except Exception as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    def progress_hook(status: dict) -> None:
+        if status.get("status") == "downloading":
+            downloaded = status.get("downloaded_bytes") or 0
+            total = status.get("total_bytes") or status.get("total_bytes_estimate") or 0
 
-    saved_path = find_downloaded_youtube_file(video_id)
+            if total:
+                progress = max(1, min(90, round((downloaded / total) * 90)))
+                set_job_progress(job_id, progress, "Downloading from YouTube")
+            else:
+                set_job_progress(job_id, 5, "Downloading from YouTube")
 
-    if not saved_path:
-        raise HTTPException(status_code=500, detail="Downloaded video was not found")
+        elif status.get("status") == "finished":
+            set_job_progress(job_id, 92, "Merging and checking downloaded video")
+
+    def task():
+        try:
+            try:
+                import yt_dlp
+            except ImportError as error:
+                raise RuntimeError(
+                    "yt-dlp is not installed. Run pip install -r requirements.txt."
+                ) from error
+
+            ydl_opts = {
+                "format": get_youtube_format(payload.quality),
+                "outtmpl": output_template,
+                "merge_output_format": "mp4",
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "progress_hooks": [progress_hook],
+            }
+
+            set_job_progress(job_id, 1, "Starting YouTube download")
+
+            with yt_dlp.YoutubeDL(ydl_opts) as downloader:
+                info = downloader.extract_info(payload.url, download=True)
+
+            saved_path = find_downloaded_youtube_file(video_id)
+
+            if not saved_path:
+                raise RuntimeError("Downloaded video was not found")
+
+            original_width, original_height = get_video_dimensions(saved_path)
+            file_hash = hash_file(saved_path)
+            register_uploaded_video(
+                video_id=video_id,
+                saved_path=saved_path,
+                file_hash=file_hash,
+                original_width=original_width,
+                original_height=original_height,
+            )
+
+            JOBS[job_id]["video_id"] = video_id
+            JOBS[job_id]["filename"] = saved_path.name
+            JOBS[job_id]["title"] = info.get("title") if isinstance(info, dict) else None
+            JOBS[job_id]["original_width"] = original_width
+            JOBS[job_id]["original_height"] = original_height
+            JOBS[job_id]["status"] = "done"
+            set_job_progress(job_id, 100, "YouTube download finished")
+            JOBS[job_id]["finished_at"] = utc_now()
+
+        except Exception as error:
+            JOBS[job_id]["status"] = "failed"
+            JOBS[job_id]["error"] = str(error)
+            JOBS[job_id]["finished_at"] = utc_now()
+
+    background_tasks.add_task(task)
 
     return {
-        "video_id": video_id,
-        "filename": saved_path.name,
-        "title": info.get("title") if isinstance(info, dict) else None,
-        "message": "YouTube video downloaded successfully",
+        "job_id": job_id,
+        "status": "processing",
+        "message": "YouTube download job started",
     }
 
 
@@ -1278,53 +1330,85 @@ def build_random_shorts_groups(
 
 
 def concatenate_video_files(input_paths: list[Path], output_path: Path) -> None:
-    concat_file = output_path.parent / "concat.txt"
-    concat_file.write_text(
-        "".join(f"file '{path.resolve().as_posix()}'\n" for path in input_paths),
-        encoding="utf-8",
-    )
+    if not input_paths:
+        raise RuntimeError("No input videos were provided for concatenation")
 
-    copy_command = [
+    input_args = []
+    for input_path in input_paths:
+        input_args.extend(["-i", str(input_path)])
+
+    video_audio_filters = []
+    video_audio_inputs = []
+    video_only_filters = []
+    video_only_inputs = []
+
+    for index in range(len(input_paths)):
+        video_audio_filters.append(
+            f"[{index}:v]fps=30,format=yuv420p,setpts=PTS-STARTPTS[v{index}]"
+        )
+        video_audio_filters.append(
+            f"[{index}:a]aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a{index}]"
+        )
+        video_audio_inputs.append(f"[v{index}][a{index}]")
+        video_only_filters.append(
+            f"[{index}:v]fps=30,format=yuv420p,setpts=PTS-STARTPTS[v{index}]"
+        )
+        video_only_inputs.append(f"[v{index}]")
+
+    command = [
         "ffmpeg",
         "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        str(concat_file),
-        "-c",
-        "copy",
+        *input_args,
+        "-filter_complex",
+        (
+            ";".join(video_audio_filters)
+            + ";"
+            + "".join(video_audio_inputs)
+            + f"concat=n={len(input_paths)}:v=1:a=1[outv][outa]"
+        ),
+        "-map",
+        "[outv]",
+        "-map",
+        "[outa]",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "veryfast",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
         "-movflags",
         "+faststart",
         str(output_path),
     ]
 
     try:
-        run_command(copy_command)
+        run_command(command)
     except RuntimeError:
         run_command(
             [
                 "ffmpeg",
                 "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_file),
+                *input_args,
+                "-filter_complex",
+                (
+                    ";".join(video_only_filters)
+                    + ";"
+                    + "".join(video_only_inputs)
+                    + f"concat=n={len(input_paths)}:v=1:a=0[outv]"
+                ),
+                "-map",
+                "[outv]",
                 "-c:v",
                 "libx264",
                 "-crf",
                 "18",
                 "-preset",
                 "veryfast",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
+                "-an",
                 "-movflags",
                 "+faststart",
                 str(output_path),

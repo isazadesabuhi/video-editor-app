@@ -39,6 +39,7 @@ export default function HomePage() {
     "1080p"
   );
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
+  const [youtubeJobId, setYoutubeJobId] = useState<string | null>(null);
   const [isDownloadingYoutube, setIsDownloadingYoutube] = useState(false);
   const [crop, setCrop] = useState<Crop | null>(null);
   const [cropQuality, setCropQuality] = useState<
@@ -72,11 +73,33 @@ export default function HomePage() {
     ]);
   }, []);
 
-  const updateJob = useCallback((updatedJob: JobStatus) => {
-    setJobs((prev) =>
-      prev.map((job) => (job.id === updatedJob.id ? updatedJob : job))
-    );
-  }, []);
+  const updateJob = useCallback(
+    (updatedJob: JobStatus) => {
+      setJobs((prev) =>
+        prev.map((job) => (job.id === updatedJob.id ? updatedJob : job))
+      );
+
+      if (
+        updatedJob.id === youtubeJobId &&
+        updatedJob.status === "done" &&
+        updatedJob.video_id
+      ) {
+        setFile(null);
+        setVideoId(updatedJob.video_id);
+        setVideoUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return getVideoPreviewUrl(updatedJob.video_id as string);
+        });
+        setUploadMessage(
+          updatedJob.title
+            ? `Downloaded ${updatedJob.title}`
+            : `Downloaded ${updatedJob.filename}`
+        );
+        setYoutubeJobId(null);
+      }
+    },
+    [youtubeJobId]
+  );
 
   function resetVideoState() {
     setVideoId(null);
@@ -133,17 +156,12 @@ export default function HomePage() {
         quality: youtubeQuality,
       });
 
-      setFile(null);
-      setVideoId(result.video_id);
-      setVideoUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return getVideoPreviewUrl(result.video_id);
+      setYoutubeJobId(result.job_id);
+      setUploadMessage("YouTube download started");
+      addJob({
+        id: result.job_id,
+        label: "YouTube download",
       });
-      setUploadMessage(
-        result.title
-          ? `Downloaded ${result.title}`
-          : `Downloaded ${result.filename}`
-      );
     } catch (error) {
       setYoutubeError(
         getApiErrorMessage(error, "Could not download the YouTube video")
