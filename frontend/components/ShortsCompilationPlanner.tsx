@@ -25,7 +25,7 @@ export default function ShortsCompilationPlanner({ onJobStarted }: Props) {
   const [jobs, setJobs] = useState<ShortsLibraryJob[]>([]);
   const [totalClips, setTotalClips] = useState(0);
   const [clipCount, setClipCount] = useState(5);
-  const [minDurationSeconds, setMinDurationSeconds] = useState(15);
+  const [minDurationSeconds, setMinDurationSeconds] = useState(45);
   const [maxDurationSeconds, setMaxDurationSeconds] = useState(60);
   const [minClipsPerShort, setMinClipsPerShort] = useState(2);
   const [maxShorts, setMaxShorts] = useState(10);

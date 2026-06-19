@@ -44,6 +44,7 @@ export default function CutListEditor({
   const [isPreparingShorts, setIsPreparingShorts] = useState(false);
   const [isCreatingShortsOnly, setIsCreatingShortsOnly] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isManualCutOpen, setIsManualCutOpen] = useState(false);
   const [isCutListOpen, setIsCutListOpen] = useState(true);
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
@@ -245,63 +246,85 @@ export default function CutListEditor({
 
   return (
     <div className="space-y-4 rounded border p-4">
-      <h2 className="text-xl font-semibold">Cut into multiple clips</h2>
-      <p className="text-sm text-gray-600">
-        Times support HH:MM:SS or HH:MM:SS:MS. Example: 00:00:01:250 means 1.25 seconds.
-      </p>
-      <p className="text-sm text-gray-600">
-        Best quality mode re-encodes clips for cleaner starts, fewer freezes, and better compatibility.
-      </p>
+      <div className="space-y-3 rounded border p-3">
+        <button
+          onClick={() => setIsManualCutOpen((prev) => !prev)}
+          className="flex w-full items-center justify-between text-left"
+        >
+          <span>
+            <span className="block text-xl font-semibold">
+              Cut into multiple clips
+            </span>
+            <span className="block text-sm text-gray-600">
+              Open only when setting clip times manually from the video.
+            </span>
+          </span>
+          <span className="text-sm text-gray-600">
+            {isManualCutOpen ? "Hide" : "Show"}
+          </span>
+        </button>
 
-      <div className="space-y-4 rounded border p-3">
-        <video ref={videoRef} src={videoUrl} controls className="w-full bg-black" />
+        {isManualCutOpen && (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm text-gray-600">
+                Times support HH:MM:SS or HH:MM:SS:MS. Example: 00:00:01:250 means 1.25 seconds.
+              </p>
+              <p className="text-sm text-gray-600">
+                Best quality mode re-encodes clips for cleaner starts, fewer freezes, and better compatibility.
+              </p>
+            </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Set selected clip from player</p>
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => setSelectedCutTime("start")}
-                className="rounded border px-4 py-2"
-              >
-                Set start
-              </button>
-              <button
-                onClick={() => setSelectedCutTime("end")}
-                className="rounded border px-4 py-2"
-              >
-                Set end
-              </button>
+            <video ref={videoRef} src={videoUrl} controls className="w-full bg-black" />
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Set selected clip from player</p>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={() => setSelectedCutTime("start")}
+                    className="rounded border px-4 py-2"
+                  >
+                    Set start
+                  </button>
+                  <button
+                    onClick={() => setSelectedCutTime("end")}
+                    className="rounded border px-4 py-2"
+                  >
+                    Set end
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Create new clip from player</p>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={() => setSelectionTime("start")}
+                    className="rounded border px-4 py-2"
+                  >
+                    Mark start
+                  </button>
+                  <button
+                    onClick={() => setSelectionTime("end")}
+                    className="rounded border px-4 py-2"
+                  >
+                    Mark end
+                  </button>
+                  <button
+                    onClick={addCutFromSelection}
+                    className="rounded bg-black px-4 py-2 text-white"
+                  >
+                    Add clip from selection
+                  </button>
+                </div>
+                <p className="text-sm text-gray-600">
+                  Selection: {selectionStart} to {selectionEnd}
+                </p>
+              </div>
             </div>
           </div>
-
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Create new clip from player</p>
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => setSelectionTime("start")}
-                className="rounded border px-4 py-2"
-              >
-                Mark start
-              </button>
-              <button
-                onClick={() => setSelectionTime("end")}
-                className="rounded border px-4 py-2"
-              >
-                Mark end
-              </button>
-              <button
-                onClick={addCutFromSelection}
-                className="rounded bg-black px-4 py-2 text-white"
-              >
-                Add clip from selection
-              </button>
-            </div>
-            <p className="text-sm text-gray-600">
-              Selection: {selectionStart} to {selectionEnd}
-            </p>
-          </div>
-        </div>
+        )}
       </div>
 
       <div className="space-y-4 rounded border p-3">

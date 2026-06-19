@@ -52,6 +52,7 @@ export default function HomePage() {
   const [dynamicMinSeconds, setDynamicMinSeconds] = useState(2);
   const [dynamicMaxSegments, setDynamicMaxSegments] = useState(80);
   const [isDetectingDynamicCrop, setIsDetectingDynamicCrop] = useState(false);
+  const [isCropShortsOpen, setIsCropShortsOpen] = useState(false);
   const [isDynamicCropOpen, setIsDynamicCropOpen] = useState(false);
   const [dynamicCropError, setDynamicCropError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobStatus[]>([]);
@@ -381,87 +382,106 @@ export default function HomePage() {
 
       {videoUrl && (
         <section className="space-y-4 rounded border p-4">
-          <h2 className="text-xl font-semibold">3. Crop or make Shorts</h2>
+          <button
+            onClick={() => setIsCropShortsOpen((prev) => !prev)}
+            className="flex w-full items-center justify-between text-left"
+          >
+            <span>
+              <span className="block text-xl font-semibold">
+                3. Crop or make Shorts
+              </span>
+              <span className="block text-sm text-gray-600">
+                Open when you need manual cropping or a one-click Shorts export.
+              </span>
+            </span>
+            <span className="text-sm text-gray-600">
+              {isCropShortsOpen ? "Hide" : "Show"}
+            </span>
+          </button>
 
-          <CropEditor videoUrl={videoUrl} onCropReady={setCrop} />
+          {isCropShortsOpen && (
+            <>
+              <CropEditor videoUrl={videoUrl} onCropReady={setCrop} />
 
-          {crop && (
-            <pre className="rounded bg-gray-100 p-4 text-sm">
-              {JSON.stringify(crop, null, 2)}
-            </pre>
-          )}
+              {crop && (
+                <pre className="rounded bg-gray-100 p-4 text-sm">
+                  {JSON.stringify(crop, null, 2)}
+                </pre>
+              )}
 
-          <label className="block max-w-sm space-y-1">
-            <span className="text-sm font-medium">Crop export quality</span>
-            <select
-              value={cropQuality}
-              onChange={(event) =>
-                setCropQuality(
-                  event.target.value as "high" | "very_high" | "lossless"
-                )
-              }
-              className="w-full rounded border p-2"
-            >
-              <option value="high">High, CRF 18</option>
-              <option value="very_high">Very high, CRF 16</option>
-              <option value="lossless">Lossless</option>
-            </select>
-          </label>
+              <label className="block max-w-sm space-y-1">
+                <span className="text-sm font-medium">Crop export quality</span>
+                <select
+                  value={cropQuality}
+                  onChange={(event) =>
+                    setCropQuality(
+                      event.target.value as "high" | "very_high" | "lossless"
+                    )
+                  }
+                  className="w-full rounded border p-2"
+                >
+                  <option value="high">High, CRF 18</option>
+                  <option value="very_high">Very high, CRF 16</option>
+                  <option value="lossless">Lossless</option>
+                </select>
+              </label>
 
-          <div className="flex flex-wrap gap-4">
-            <button
-              onClick={handleCropExport}
-              disabled={!videoId || !crop}
-              title={customCropDisabledReason || undefined}
-              className="rounded bg-black px-4 py-2 text-white disabled:opacity-50"
-            >
-              Export custom crop
-            </button>
+              <div className="flex flex-wrap gap-4">
+                <button
+                  onClick={handleCropExport}
+                  disabled={!videoId || !crop}
+                  title={customCropDisabledReason || undefined}
+                  className="rounded bg-black px-4 py-2 text-white disabled:opacity-50"
+                >
+                  Export custom crop
+                </button>
 
-            <button
-              onClick={() => handleShortsMode("blur_background")}
-              disabled={!videoId}
-              className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
-            >
-              Make Shorts with blurred background
-            </button>
+                <button
+                  onClick={() => handleShortsMode("blur_background")}
+                  disabled={!videoId}
+                  className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
+                >
+                  Make Shorts with blurred background
+                </button>
 
-            <button
-              onClick={() => handleShortsMode("crop_fill")}
-              disabled={!videoId}
-              className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
-            >
-              Make Shorts full-screen crop
-            </button>
+                <button
+                  onClick={() => handleShortsMode("crop_fill")}
+                  disabled={!videoId}
+                  className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
+                >
+                  Make Shorts full-screen crop
+                </button>
 
-            <button
-              onClick={() => handleShortsMode("fit_padding")}
-              disabled={!videoId}
-              className="rounded border px-4 py-2 disabled:opacity-50"
-            >
-              Make Shorts with black padding
-            </button>
+                <button
+                  onClick={() => handleShortsMode("fit_padding")}
+                  disabled={!videoId}
+                  className="rounded border px-4 py-2 disabled:opacity-50"
+                >
+                  Make Shorts with black padding
+                </button>
 
-            <button
-              onClick={handleVerticalFromSelectedCrop}
-              disabled={!videoId || !crop}
-              title={
-                !videoId
-                  ? "Upload the video to the backend before exporting."
-                  : !crop
-                    ? "Choose a crop area first."
-                    : undefined
-              }
-              className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
-            >
-              Make selected crop for TikTok/Shorts
-            </button>
-          </div>
+                <button
+                  onClick={handleVerticalFromSelectedCrop}
+                  disabled={!videoId || !crop}
+                  title={
+                    !videoId
+                      ? "Upload the video to the backend before exporting."
+                      : !crop
+                        ? "Choose a crop area first."
+                        : undefined
+                  }
+                  className="rounded bg-blue-700 px-4 py-2 text-white disabled:opacity-50"
+                >
+                  Make selected crop for TikTok/Shorts
+                </button>
+              </div>
 
-          {customCropDisabledReason && (
-            <p className="text-sm text-gray-600">
-              {customCropDisabledReason}
-            </p>
+              {customCropDisabledReason && (
+                <p className="text-sm text-gray-600">
+                  {customCropDisabledReason}
+                </p>
+              )}
+            </>
           )}
         </section>
       )}

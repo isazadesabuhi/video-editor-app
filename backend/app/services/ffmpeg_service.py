@@ -354,6 +354,8 @@ def detect_scene_clips(
     threshold: float = 0.35,
     min_clip_seconds: float = 2,
     end_trim_ms: int = 120,
+    remove_black_screens: bool = False,
+    black_min_duration_seconds: float = 0.15,
 ) -> list[dict[str, str]]:
     duration = get_video_duration(input_path)
     end_trim_seconds = end_trim_ms / 1000
@@ -363,6 +365,15 @@ def detect_scene_clips(
         min_segment_seconds=min_clip_seconds,
     )
 
+    black_ranges = (
+        detect_black_ranges(
+            input_path=input_path,
+            min_duration_seconds=black_min_duration_seconds,
+        )
+        if remove_black_screens
+        else []
+    )
+
     clips = []
     for index, (start, end) in enumerate(boundaries, start=1):
         trimmed_end = end
@@ -370,12 +381,23 @@ def detect_scene_clips(
         if end < duration:
             trimmed_end = max(start, end - end_trim_seconds)
 
-        if trimmed_end - start >= min_clip_seconds:
+        ranges = subtract_ranges(
+            start=start,
+            end=trimmed_end,
+            remove_ranges=black_ranges,
+            min_duration_seconds=min_clip_seconds,
+        )
+
+        for range_index, (range_start, range_end) in enumerate(ranges, start=1):
             clips.append(
                 {
-                    "start": seconds_to_time(start),
-                    "end": seconds_to_time(trimmed_end),
-                    "name": f"clip_{index}",
+                    "start": seconds_to_time(range_start),
+                    "end": seconds_to_time(range_end),
+                    "name": (
+                        f"clip_{index}"
+                        if len(ranges) == 1
+                        else f"clip_{index}_{range_index}"
+                    ),
                 }
             )
 
@@ -389,6 +411,96 @@ def detect_scene_clips(
         )
 
     return clips
+
+
+def detect_black_ranges(
+    input_path: Path,
+    min_duration_seconds: float = 0.15,
+    pixel_threshold: float = 0.10,
+    picture_threshold: float = 0.98,
+) -> list[tuple[float, float]]:
+    duration = get_video_duration(input_path)
+    output = run_capture_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-i",
+            str(input_path),
+            "-vf",
+            (
+                "blackdetect="
+                f"d={min_duration_seconds}:"
+                f"pix_th={pixel_threshold}:"
+                f"pic_th={picture_threshold}"
+            ),
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+
+    ranges = []
+    for match in re.finditer(
+        r"black_start:([0-9]+(?:\.[0-9]+)?)\s+"
+        r"black_end:([0-9]+(?:\.[0-9]+)?)\s+"
+        r"black_duration:([0-9]+(?:\.[0-9]+)?)",
+        output,
+    ):
+        start = max(0.0, float(match.group(1)))
+        end = min(duration, float(match.group(2)))
+
+        if end > start:
+            ranges.append((start, end))
+
+    return merge_ranges(ranges)
+
+
+def merge_ranges(ranges: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    merged = []
+
+    for start, end in sorted(ranges):
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+            continue
+
+        merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+
+    return merged
+
+
+def subtract_ranges(
+    start: float,
+    end: float,
+    remove_ranges: list[tuple[float, float]],
+    min_duration_seconds: float = 0.1,
+) -> list[tuple[float, float]]:
+    if end <= start:
+        return []
+
+    if not remove_ranges:
+        return [(start, end)] if end - start >= min_duration_seconds else []
+
+    kept_ranges = []
+    cursor = start
+
+    for remove_start, remove_end in remove_ranges:
+        if remove_end <= cursor:
+            continue
+
+        if remove_start >= end:
+            break
+
+        kept_end = min(end, remove_start)
+        if kept_end - cursor >= min_duration_seconds:
+            kept_ranges.append((cursor, kept_end))
+
+        cursor = max(cursor, remove_end)
+
+    if end - cursor >= min_duration_seconds:
+        kept_ranges.append((cursor, end))
+
+    return kept_ranges
 
 
 def detect_crop_for_range(
@@ -809,3 +921,86 @@ def cut_video_accurate(
     ]
 
     run_command(command)
+
+
+def cut_video_without_black_screens(
+    input_path: Path,
+    output_path: Path,
+    start: str,
+    end: str,
+    quality: str = "high",
+    black_ranges: list[tuple[float, float]] | None = None,
+    black_min_duration_seconds: float = 0.15,
+) -> None:
+    start_seconds = time_to_seconds(start)
+    end_seconds = time_to_seconds(end)
+
+    if end_seconds <= start_seconds:
+        raise ValueError(f"Invalid cut range: {start} to {end}")
+
+    ranges_to_remove = (
+        black_ranges
+        if black_ranges is not None
+        else detect_black_ranges(
+            input_path=input_path,
+            min_duration_seconds=black_min_duration_seconds,
+        )
+    )
+    kept_ranges = subtract_ranges(
+        start=start_seconds,
+        end=end_seconds,
+        remove_ranges=ranges_to_remove,
+    )
+
+    if not kept_ranges:
+        raise ValueError(f"Cut range contains only detected black screen: {start} to {end}")
+
+    if len(kept_ranges) == 1:
+        kept_start, kept_end = kept_ranges[0]
+        cut_video_accurate(
+            input_path=input_path,
+            output_path=output_path,
+            start=seconds_to_time(kept_start),
+            end=seconds_to_time(kept_end),
+            quality=quality,
+        )
+        return
+
+    with tempfile.TemporaryDirectory(prefix=f"{output_path.stem}_parts_") as temp_dir:
+        temp_path = Path(temp_dir)
+        part_paths = []
+
+        for index, (kept_start, kept_end) in enumerate(kept_ranges, start=1):
+            part_path = temp_path / f"part_{index:03d}.mp4"
+            cut_video_accurate(
+                input_path=input_path,
+                output_path=part_path,
+                start=seconds_to_time(kept_start),
+                end=seconds_to_time(kept_end),
+                quality=quality,
+            )
+            part_paths.append(part_path)
+
+        concat_list_path = temp_path / "concat.txt"
+        with concat_list_path.open("w", encoding="utf-8") as concat_list:
+            for part_path in part_paths:
+                escaped_path = str(part_path).replace("\\", "/").replace("'", "'\\''")
+                concat_list.write(f"file '{escaped_path}'\n")
+
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_list_path),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )

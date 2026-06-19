@@ -34,6 +34,8 @@ from app.services.ffmpeg_service import (
     crop_selection_for_vertical_social,
     cut_video_copy,
     cut_video_accurate,
+    cut_video_without_black_screens,
+    detect_black_ranges,
     detect_dynamic_crop_segments,
     detect_scene_clips,
     export_dynamic_crop_video,
@@ -430,6 +432,14 @@ def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
         try:
             used_names: set[str] = set()
             total_cuts = len(payload.cuts)
+            black_ranges = (
+                detect_black_ranges(
+                    input_path=input_path,
+                    min_duration_seconds=payload.black_min_duration_seconds,
+                )
+                if payload.remove_black_screens
+                else None
+            )
 
             for index, cut in enumerate(payload.cuts, start=1):
                 safe_name = sanitize_filename(cut.name, f"clip_{index}")
@@ -441,7 +451,17 @@ def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
                     f"Cutting clip {index} of {total_cuts}",
                 )
 
-                if payload.mode == "accurate":
+                if payload.remove_black_screens:
+                    cut_video_without_black_screens(
+                        input_path=input_path,
+                        output_path=output_path,
+                        start=cut.start,
+                        end=cut.end,
+                        quality=payload.quality,
+                        black_ranges=black_ranges,
+                        black_min_duration_seconds=payload.black_min_duration_seconds,
+                    )
+                elif payload.mode == "accurate":
                     cut_video_accurate(
                         input_path=input_path,
                         output_path=output_path,
@@ -517,6 +537,14 @@ def cut_and_prepare_shorts_endpoint(
             used_names: set[str] = set()
             total_steps = len(payload.cuts) * 2
             completed_steps = 0
+            black_ranges = (
+                detect_black_ranges(
+                    input_path=input_path,
+                    min_duration_seconds=payload.black_min_duration_seconds,
+                )
+                if payload.remove_black_screens
+                else None
+            )
 
             for index, cut in enumerate(payload.cuts, start=1):
                 safe_name = sanitize_filename(cut.name, f"clip_{index}")
@@ -529,7 +557,17 @@ def cut_and_prepare_shorts_endpoint(
                     f"Cutting clip {index} of {len(payload.cuts)}",
                 )
 
-                if payload.mode == "accurate":
+                if payload.remove_black_screens:
+                    cut_video_without_black_screens(
+                        input_path=input_path,
+                        output_path=cut_output_path,
+                        start=cut.start,
+                        end=cut.end,
+                        quality=payload.quality,
+                        black_ranges=black_ranges,
+                        black_min_duration_seconds=payload.black_min_duration_seconds,
+                    )
+                elif payload.mode == "accurate":
                     cut_video_accurate(
                         input_path=input_path,
                         output_path=cut_output_path,
@@ -626,6 +664,14 @@ def cut_to_shorts_endpoint(
             used_names: set[str] = set()
             total_steps = len(payload.cuts) * 2
             completed_steps = 0
+            black_ranges = (
+                detect_black_ranges(
+                    input_path=input_path,
+                    min_duration_seconds=payload.black_min_duration_seconds,
+                )
+                if payload.remove_black_screens
+                else None
+            )
 
             with tempfile.TemporaryDirectory(prefix=f"{job_id}_cuts_") as temp_dir:
                 temp_path = Path(temp_dir)
@@ -641,7 +687,17 @@ def cut_to_shorts_endpoint(
                         f"Cutting temporary clip {index} of {len(payload.cuts)}",
                     )
 
-                    if payload.mode == "accurate":
+                    if payload.remove_black_screens:
+                        cut_video_without_black_screens(
+                            input_path=input_path,
+                            output_path=temp_cut_path,
+                            start=cut.start,
+                            end=cut.end,
+                            quality=payload.quality,
+                            black_ranges=black_ranges,
+                            black_min_duration_seconds=payload.black_min_duration_seconds,
+                        )
+                    elif payload.mode == "accurate":
                         cut_video_accurate(
                             input_path=input_path,
                             output_path=temp_cut_path,
@@ -719,6 +775,8 @@ def detect_clips_endpoint(payload: DetectClipsRequest):
             threshold=payload.threshold,
             min_clip_seconds=payload.min_clip_seconds,
             end_trim_ms=payload.end_trim_ms,
+            remove_black_screens=payload.remove_black_screens,
+            black_min_duration_seconds=payload.black_min_duration_seconds,
         )
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
