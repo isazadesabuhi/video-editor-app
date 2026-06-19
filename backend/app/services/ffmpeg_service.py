@@ -356,6 +356,9 @@ def detect_scene_clips(
     end_trim_ms: int = 120,
     remove_black_screens: bool = False,
     black_min_duration_seconds: float = 0.15,
+    black_pixel_threshold: float = 0.10,
+    black_picture_threshold: float = 0.98,
+    black_trim_padding_ms: int = 120,
 ) -> list[dict[str, str]]:
     duration = get_video_duration(input_path)
     end_trim_seconds = end_trim_ms / 1000
@@ -369,6 +372,9 @@ def detect_scene_clips(
         detect_black_ranges(
             input_path=input_path,
             min_duration_seconds=black_min_duration_seconds,
+            pixel_threshold=black_pixel_threshold,
+            picture_threshold=black_picture_threshold,
+            trim_padding_seconds=black_trim_padding_ms / 1000,
         )
         if remove_black_screens
         else []
@@ -418,6 +424,7 @@ def detect_black_ranges(
     min_duration_seconds: float = 0.15,
     pixel_threshold: float = 0.10,
     picture_threshold: float = 0.98,
+    trim_padding_seconds: float = 0,
 ) -> list[tuple[float, float]]:
     duration = get_video_duration(input_path)
     output = run_capture_command(
@@ -441,19 +448,54 @@ def detect_black_ranges(
     )
 
     ranges = []
+    current_start: float | None = None
+
     for match in re.finditer(
-        r"black_start:([0-9]+(?:\.[0-9]+)?)\s+"
-        r"black_end:([0-9]+(?:\.[0-9]+)?)\s+"
-        r"black_duration:([0-9]+(?:\.[0-9]+)?)",
+        r"black_(start|end|duration):([0-9]+(?:\.[0-9]+)?)",
         output,
     ):
-        start = max(0.0, float(match.group(1)))
-        end = min(duration, float(match.group(2)))
+        key = match.group(1)
+        value = float(match.group(2))
 
-        if end > start:
-            ranges.append((start, end))
+        if key == "start":
+            current_start = max(0.0, value)
+            continue
+
+        if key != "end" or current_start is None:
+            continue
+
+        end = min(duration, value)
+
+        if end > current_start and end - current_start >= min_duration_seconds:
+            ranges.append(
+                expand_range(current_start, end, duration, trim_padding_seconds)
+            )
+
+        current_start = None
+
+    if current_start is not None:
+        end = duration
+
+        if end > current_start and end - current_start >= min_duration_seconds:
+            ranges.append(
+                expand_range(current_start, end, duration, trim_padding_seconds)
+            )
 
     return merge_ranges(ranges)
+
+
+def expand_range(
+    start: float,
+    end: float,
+    duration: float,
+    padding_seconds: float,
+) -> tuple[float, float]:
+    padding = max(0.0, padding_seconds)
+
+    return (
+        max(0.0, start - padding),
+        min(duration, end + padding),
+    )
 
 
 def merge_ranges(ranges: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -931,6 +973,9 @@ def cut_video_without_black_screens(
     quality: str = "high",
     black_ranges: list[tuple[float, float]] | None = None,
     black_min_duration_seconds: float = 0.15,
+    black_pixel_threshold: float = 0.10,
+    black_picture_threshold: float = 0.98,
+    black_trim_padding_ms: int = 120,
 ) -> None:
     start_seconds = time_to_seconds(start)
     end_seconds = time_to_seconds(end)
@@ -944,6 +989,9 @@ def cut_video_without_black_screens(
         else detect_black_ranges(
             input_path=input_path,
             min_duration_seconds=black_min_duration_seconds,
+            pixel_threshold=black_pixel_threshold,
+            picture_threshold=black_picture_threshold,
+            trim_padding_seconds=black_trim_padding_ms / 1000,
         )
     )
     kept_ranges = subtract_ranges(

@@ -436,6 +436,9 @@ def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
                 detect_black_ranges(
                     input_path=input_path,
                     min_duration_seconds=payload.black_min_duration_seconds,
+                    pixel_threshold=payload.black_pixel_threshold,
+                    picture_threshold=payload.black_picture_threshold,
+                    trim_padding_seconds=payload.black_trim_padding_ms / 1000,
                 )
                 if payload.remove_black_screens
                 else None
@@ -460,6 +463,9 @@ def cut_video_endpoint(payload: CutRequest, background_tasks: BackgroundTasks):
                         quality=payload.quality,
                         black_ranges=black_ranges,
                         black_min_duration_seconds=payload.black_min_duration_seconds,
+                        black_pixel_threshold=payload.black_pixel_threshold,
+                        black_picture_threshold=payload.black_picture_threshold,
+                        black_trim_padding_ms=payload.black_trim_padding_ms,
                     )
                 elif payload.mode == "accurate":
                     cut_video_accurate(
@@ -541,6 +547,9 @@ def cut_and_prepare_shorts_endpoint(
                 detect_black_ranges(
                     input_path=input_path,
                     min_duration_seconds=payload.black_min_duration_seconds,
+                    pixel_threshold=payload.black_pixel_threshold,
+                    picture_threshold=payload.black_picture_threshold,
+                    trim_padding_seconds=payload.black_trim_padding_ms / 1000,
                 )
                 if payload.remove_black_screens
                 else None
@@ -566,6 +575,9 @@ def cut_and_prepare_shorts_endpoint(
                         quality=payload.quality,
                         black_ranges=black_ranges,
                         black_min_duration_seconds=payload.black_min_duration_seconds,
+                        black_pixel_threshold=payload.black_pixel_threshold,
+                        black_picture_threshold=payload.black_picture_threshold,
+                        black_trim_padding_ms=payload.black_trim_padding_ms,
                     )
                 elif payload.mode == "accurate":
                     cut_video_accurate(
@@ -668,6 +680,9 @@ def cut_to_shorts_endpoint(
                 detect_black_ranges(
                     input_path=input_path,
                     min_duration_seconds=payload.black_min_duration_seconds,
+                    pixel_threshold=payload.black_pixel_threshold,
+                    picture_threshold=payload.black_picture_threshold,
+                    trim_padding_seconds=payload.black_trim_padding_ms / 1000,
                 )
                 if payload.remove_black_screens
                 else None
@@ -696,6 +711,9 @@ def cut_to_shorts_endpoint(
                             quality=payload.quality,
                             black_ranges=black_ranges,
                             black_min_duration_seconds=payload.black_min_duration_seconds,
+                            black_pixel_threshold=payload.black_pixel_threshold,
+                            black_picture_threshold=payload.black_picture_threshold,
+                            black_trim_padding_ms=payload.black_trim_padding_ms,
                         )
                     elif payload.mode == "accurate":
                         cut_video_accurate(
@@ -777,6 +795,9 @@ def detect_clips_endpoint(payload: DetectClipsRequest):
             end_trim_ms=payload.end_trim_ms,
             remove_black_screens=payload.remove_black_screens,
             black_min_duration_seconds=payload.black_min_duration_seconds,
+            black_pixel_threshold=payload.black_pixel_threshold,
+            black_picture_threshold=payload.black_picture_threshold,
+            black_trim_padding_ms=payload.black_trim_padding_ms,
         )
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

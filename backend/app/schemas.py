@@ -79,6 +79,9 @@ class CutRequest(BaseModel):
     quality: Literal["high", "very_high", "lossless"] = "high"
     remove_black_screens: bool = False
     black_min_duration_seconds: float = Field(default=0.15, ge=0.05, le=10)
+    black_pixel_threshold: float = Field(default=0.10, ge=0.01, le=1)
+    black_picture_threshold: float = Field(default=0.98, ge=0.50, le=1)
+    black_trim_padding_ms: int = Field(default=120, ge=0, le=2000)
 
 
 class CutAndPrepareShortsRequest(CutRequest):
@@ -110,6 +113,9 @@ class DetectClipsRequest(BaseModel):
     end_trim_ms: int = Field(default=120, ge=0, le=2000)
     remove_black_screens: bool = False
     black_min_duration_seconds: float = Field(default=0.15, ge=0.05, le=10)
+    black_pixel_threshold: float = Field(default=0.10, ge=0.01, le=1)
+    black_picture_threshold: float = Field(default=0.98, ge=0.50, le=1)
+    black_trim_padding_ms: int = Field(default=120, ge=0, le=2000)
 
 
 class JobResponse(BaseModel):

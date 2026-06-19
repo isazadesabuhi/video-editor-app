@@ -51,6 +51,11 @@ export default function CutListEditor({
   const [sceneThreshold, setSceneThreshold] = useState(0.35);
   const [minClipSeconds, setMinClipSeconds] = useState(2);
   const [endTrimMs, setEndTrimMs] = useState(120);
+  const [removeBlackScreens, setRemoveBlackScreens] = useState(false);
+  const [blackMinDurationSeconds, setBlackMinDurationSeconds] = useState(0.08);
+  const [blackPixelThreshold, setBlackPixelThreshold] = useState(0.16);
+  const [blackPictureThreshold, setBlackPictureThreshold] = useState(0.95);
+  const [blackTrimPaddingMs, setBlackTrimPaddingMs] = useState(160);
   const [selectedCutIndex, setSelectedCutIndex] = useState(0);
   const [selectionStart, setSelectionStart] = useState("00:00:00:000");
   const [selectionEnd, setSelectionEnd] = useState("00:00:10:000");
@@ -147,6 +152,11 @@ export default function CutListEditor({
         threshold: sceneThreshold,
         min_clip_seconds: minClipSeconds,
         end_trim_ms: endTrimMs,
+        remove_black_screens: removeBlackScreens,
+        black_min_duration_seconds: blackMinDurationSeconds,
+        black_pixel_threshold: blackPixelThreshold,
+        black_picture_threshold: blackPictureThreshold,
+        black_trim_padding_ms: blackTrimPaddingMs,
       });
 
       if (!Array.isArray(result.clips) || result.clips.length === 0) {
@@ -172,6 +182,11 @@ export default function CutListEditor({
         video_id: videoId,
         mode,
         quality,
+        remove_black_screens: removeBlackScreens,
+        black_min_duration_seconds: blackMinDurationSeconds,
+        black_pixel_threshold: blackPixelThreshold,
+        black_picture_threshold: blackPictureThreshold,
+        black_trim_padding_ms: blackTrimPaddingMs,
         cuts,
       });
 
@@ -197,6 +212,11 @@ export default function CutListEditor({
         quality,
         shorts_mode: shortsMode,
         shorts_quality: shortsQuality,
+        remove_black_screens: removeBlackScreens,
+        black_min_duration_seconds: blackMinDurationSeconds,
+        black_pixel_threshold: blackPixelThreshold,
+        black_picture_threshold: blackPictureThreshold,
+        black_trim_padding_ms: blackTrimPaddingMs,
         cuts,
       });
 
@@ -226,6 +246,11 @@ export default function CutListEditor({
         quality,
         shorts_mode: shortsMode,
         shorts_quality: shortsQuality,
+        remove_black_screens: removeBlackScreens,
+        black_min_duration_seconds: blackMinDurationSeconds,
+        black_pixel_threshold: blackPixelThreshold,
+        black_picture_threshold: blackPictureThreshold,
+        black_trim_padding_ms: blackTrimPaddingMs,
         cuts,
       });
 
@@ -377,6 +402,87 @@ export default function CutListEditor({
               className="w-full rounded border p-2"
             />
           </label>
+        </div>
+
+        <div className="space-y-3 rounded border border-gray-200 p-3">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={removeBlackScreens}
+              onChange={(event) => setRemoveBlackScreens(event.target.checked)}
+            />
+            <span className="text-sm font-medium">Remove black dividers</span>
+          </label>
+
+          <p className="text-sm text-gray-600">
+            Use this when short clips are separated by black frames. Increase darkness tolerance or lower frame coverage if some dividers remain.
+          </p>
+
+          <div className="grid gap-4 sm:grid-cols-4">
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Minimum black seconds</span>
+              <input
+                type="number"
+                min="0.05"
+                max="10"
+                step="0.01"
+                value={blackMinDurationSeconds}
+                onChange={(event) =>
+                  setBlackMinDurationSeconds(Number(event.target.value))
+                }
+                disabled={!removeBlackScreens}
+                className="w-full rounded border p-2 disabled:opacity-50"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Darkness tolerance</span>
+              <input
+                type="number"
+                min="0.01"
+                max="1"
+                step="0.01"
+                value={blackPixelThreshold}
+                onChange={(event) =>
+                  setBlackPixelThreshold(Number(event.target.value))
+                }
+                disabled={!removeBlackScreens}
+                className="w-full rounded border p-2 disabled:opacity-50"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Frame coverage</span>
+              <input
+                type="number"
+                min="0.5"
+                max="1"
+                step="0.01"
+                value={blackPictureThreshold}
+                onChange={(event) =>
+                  setBlackPictureThreshold(Number(event.target.value))
+                }
+                disabled={!removeBlackScreens}
+                className="w-full rounded border p-2 disabled:opacity-50"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Trim padding ms</span>
+              <input
+                type="number"
+                min="0"
+                max="2000"
+                step="20"
+                value={blackTrimPaddingMs}
+                onChange={(event) =>
+                  setBlackTrimPaddingMs(Number(event.target.value))
+                }
+                disabled={!removeBlackScreens}
+                className="w-full rounded border p-2 disabled:opacity-50"
+              />
+            </label>
+          </div>
         </div>
 
         <button

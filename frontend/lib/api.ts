@@ -133,6 +133,11 @@ export async function cutVideo(payload: {
   video_id: string;
   mode: "copy" | "accurate";
   quality: "high" | "very_high" | "lossless";
+  remove_black_screens?: boolean;
+  black_min_duration_seconds?: number;
+  black_pixel_threshold?: number;
+  black_picture_threshold?: number;
+  black_trim_padding_ms?: number;
   cuts: {
     start: string;
     end: string;
@@ -149,6 +154,11 @@ export async function cutAndPrepareShorts(payload: {
   quality: "high" | "very_high" | "lossless";
   shorts_mode: "fit_padding" | "blur_background" | "crop_fill";
   shorts_quality: "high" | "very_high" | "lossless";
+  remove_black_screens?: boolean;
+  black_min_duration_seconds?: number;
+  black_pixel_threshold?: number;
+  black_picture_threshold?: number;
+  black_trim_padding_ms?: number;
   cuts: {
     start: string;
     end: string;
@@ -168,6 +178,11 @@ export async function cutToShorts(payload: {
   quality: "high" | "very_high" | "lossless";
   shorts_mode: "fit_padding" | "blur_background" | "crop_fill";
   shorts_quality: "high" | "very_high" | "lossless";
+  remove_black_screens?: boolean;
+  black_min_duration_seconds?: number;
+  black_pixel_threshold?: number;
+  black_picture_threshold?: number;
+  black_trim_padding_ms?: number;
   cuts: {
     start: string;
     end: string;
@@ -183,6 +198,11 @@ export async function detectClips(payload: {
   threshold: number;
   min_clip_seconds: number;
   end_trim_ms: number;
+  remove_black_screens?: boolean;
+  black_min_duration_seconds?: number;
+  black_pixel_threshold?: number;
+  black_picture_threshold?: number;
+  black_trim_padding_ms?: number;
 }) {
   const response = await axios.post(`${API_URL}/videos/detect-clips`, payload);
   return response.data;
