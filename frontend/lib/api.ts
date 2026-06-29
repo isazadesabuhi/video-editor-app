@@ -22,6 +22,9 @@ export type JobStatus = {
   final_outputs?: string[];
   generated_shorts_count?: number;
   skipped_clips_count?: number;
+  source_folder?: string;
+  total_videos?: number;
+  processed_videos_count?: number;
   video_id?: string;
   filename?: string;
   title?: string;
@@ -208,6 +211,33 @@ export async function detectClips(payload: {
   return response.data;
 }
 
+export async function batchCutFolder(payload: {
+  folder_path: string;
+  recursive: boolean;
+  output_kind: "cut_only" | "cut_and_prepare_shorts" | "shorts_only";
+  threshold: number;
+  min_clip_seconds: number;
+  end_trim_ms: number;
+  mode: "copy" | "accurate";
+  quality: "high" | "very_high" | "lossless";
+  shorts_mode: "fit_padding" | "blur_background" | "crop_fill";
+  shorts_quality: "high" | "very_high" | "lossless";
+  remove_black_screens: boolean;
+  black_min_duration_seconds: number;
+  black_pixel_threshold: number;
+  black_picture_threshold: number;
+  black_trim_padding_ms: number;
+  max_videos: number;
+}) {
+  const response = await axios.post(`${API_URL}/videos/batch-cut-folder`, payload);
+  return response.data as {
+    job_id: string;
+    status: "processing";
+    message: string;
+    video_count: number;
+  };
+}
+
 export async function getJob(jobId: string) {
   const response = await axios.get(`${API_URL}/jobs/${jobId}`, {
     params: {
@@ -265,6 +295,7 @@ export async function generateShortsCompilation(payload: {
   max_shorts: number;
   source_job_ids?: string[];
   title?: string;
+  divider_video_id?: string;
 }) {
   const response = await axios.post(
     `${API_URL}/shorts-compilations/generate`,

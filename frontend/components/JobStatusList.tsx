@@ -76,6 +76,23 @@ export default function JobStatusList({ jobs, onJobUpdate }: Props) {
                 </p>
               )}
 
+              {job.source_folder && (
+                <p className="mt-2 text-sm text-gray-600">
+                  Source folder:{" "}
+                  <code className="rounded bg-gray-100 px-1">
+                    {job.source_folder}
+                  </code>
+                </p>
+              )}
+
+              {typeof job.total_videos === "number" && (
+                <p className="mt-1 text-sm text-gray-600">
+                  Processed {job.processed_videos_count ?? 0} of{" "}
+                  {job.total_videos} video
+                  {job.total_videos === 1 ? "" : "s"}
+                </p>
+              )}
+
               {job.status === "done" && job.cut_output_dir && (
                 <p className="mt-2 text-sm text-gray-600">
                   Raw cuts:{" "}

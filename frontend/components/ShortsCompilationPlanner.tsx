@@ -6,6 +6,7 @@ import {
   generateShortsCompilation,
   getApiErrorMessage,
   getShortsLibrary,
+  uploadVideo,
   type ShortsLibraryJob,
 } from "@/lib/api";
 
@@ -30,6 +31,10 @@ export default function ShortsCompilationPlanner({ onJobStarted }: Props) {
   const [minClipsPerShort, setMinClipsPerShort] = useState(2);
   const [maxShorts, setMaxShorts] = useState(10);
   const [title, setTitle] = useState("");
+  const [dividerFile, setDividerFile] = useState<File | null>(null);
+  const [dividerVideoId, setDividerVideoId] = useState<string | null>(null);
+  const [dividerUploadMessage, setDividerUploadMessage] = useState<string | null>(null);
+  const [isUploadingDivider, setIsUploadingDivider] = useState(false);
   const [isLoadingLibrary, setIsLoadingLibrary] = useState(false);
   const [isCreatingDraft, setIsCreatingDraft] = useState(false);
   const [isGeneratingFinals, setIsGeneratingFinals] = useState(false);
@@ -85,6 +90,7 @@ export default function ShortsCompilationPlanner({ onJobStarted }: Props) {
         min_clips_per_short: minClipsPerShort,
         max_shorts: maxShorts,
         title: title.trim() || undefined,
+        divider_video_id: dividerVideoId || undefined,
       });
 
       onJobStarted({
@@ -97,6 +103,38 @@ export default function ShortsCompilationPlanner({ onJobStarted }: Props) {
       );
     } finally {
       setIsGeneratingFinals(false);
+    }
+  }
+
+  function handleDividerFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const selectedFile = event.target.files?.[0];
+
+    setDividerFile(selectedFile || null);
+    setDividerVideoId(null);
+    setDividerUploadMessage(null);
+  }
+
+  async function uploadDivider() {
+    if (!dividerFile) return;
+
+    setIsUploadingDivider(true);
+    setError(null);
+    setDividerUploadMessage(null);
+
+    try {
+      const result = await uploadVideo(dividerFile);
+      setDividerVideoId(result.video_id);
+      setDividerUploadMessage(
+        result.duplicate
+          ? `Already uploaded. Using ${result.filename}`
+          : `Uploaded ${result.filename}`
+      );
+    } catch (requestError) {
+      setDividerUploadMessage(
+        getApiErrorMessage(requestError, "Could not upload divider video")
+      );
+    } finally {
+      setIsUploadingDivider(false);
     }
   }
 
@@ -211,6 +249,42 @@ export default function ShortsCompilationPlanner({ onJobStarted }: Props) {
             placeholder="Optional"
           />
         </label>
+      </div>
+
+      <div className="space-y-3 rounded border border-gray-200 p-3">
+        <div>
+          <h3 className="font-semibold">Divider between videos</h3>
+          <p className="text-sm text-gray-600">
+            Upload a very short black video with sound. It will be inserted between every selected clip in generated final Shorts.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="file"
+            accept="video/*"
+            onChange={handleDividerFileChange}
+            className="max-w-full"
+          />
+
+          <button
+            onClick={uploadDivider}
+            disabled={!dividerFile || isUploadingDivider}
+            className="rounded border px-4 py-2 disabled:opacity-50"
+          >
+            {isUploadingDivider ? "Uploading..." : "Upload divider"}
+          </button>
+        </div>
+
+        {dividerUploadMessage && (
+          <p className="text-sm text-gray-600">{dividerUploadMessage}</p>
+        )}
+
+        {dividerVideoId && (
+          <p className="text-sm text-gray-600">
+            Divider ready. It will be used by Generate final Shorts.
+          </p>
+        )}
       </div>
 
       <p className="text-sm text-gray-600">

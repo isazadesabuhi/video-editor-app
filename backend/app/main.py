@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.schemas import (
+    BatchCutFolderRequest,
     CreateShortsCompilationRequest,
     CutAndPrepareShortsRequest,
     CropRequest,
@@ -58,6 +59,7 @@ app.add_middleware(
 
 
 JOBS = {}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 
 
 @app.get("/")
@@ -783,6 +785,141 @@ def cut_to_shorts_endpoint(
     }
 
 
+@app.post("/videos/batch-cut-folder")
+def batch_cut_folder_endpoint(
+    payload: BatchCutFolderRequest,
+    background_tasks: BackgroundTasks,
+):
+    folder_path = Path(payload.folder_path).expanduser()
+
+    if not folder_path.exists() or not folder_path.is_dir():
+        raise HTTPException(status_code=400, detail="Folder was not found")
+
+    video_paths = find_video_files_in_folder(
+        folder_path,
+        recursive=payload.recursive,
+        max_videos=payload.max_videos,
+    )
+
+    if not video_paths:
+        raise HTTPException(status_code=400, detail="No video files were found")
+
+    job_id = str(uuid.uuid4())
+    job_output_dir = OUTPUT_DIR / job_id
+    cut_output_dir = job_output_dir / "cut_clips"
+    shorts_output_dir = job_output_dir / "shorts_clips"
+
+    if payload.output_kind != "shorts_only":
+        cut_output_dir.mkdir(parents=True, exist_ok=True)
+
+    if payload.output_kind != "cut_only":
+        shorts_output_dir.mkdir(parents=True, exist_ok=True)
+
+    job: dict = {
+        "status": "processing",
+        "progress": 0,
+        "current_step": "Waiting to start batch cut",
+        "source_folder": str(folder_path),
+        "total_videos": len(video_paths),
+        "processed_videos_count": 0,
+        "skipped_clips_count": 0,
+        "cut_outputs": [],
+        "shorts_outputs": [],
+        "started_at": utc_now(),
+    }
+
+    if payload.output_kind != "shorts_only":
+        job["cut_output_dir"] = str(cut_output_dir)
+
+    if payload.output_kind != "cut_only":
+        job["shorts_output_dir"] = str(shorts_output_dir)
+
+    JOBS[job_id] = job
+
+    def task():
+        skipped_items = []
+        source_manifests = []
+        used_names: set[str] = set()
+
+        try:
+            for video_index, input_path in enumerate(video_paths, start=1):
+                set_job_progress(
+                    job_id,
+                    round(((video_index - 1) / len(video_paths)) * 98),
+                    f"Processing {video_index} of {len(video_paths)}: {input_path.name}",
+                )
+
+                try:
+                    source_manifest = process_batch_source_video(
+                        input_path=input_path,
+                        cut_output_dir=cut_output_dir,
+                        shorts_output_dir=shorts_output_dir,
+                        payload=payload,
+                        used_names=used_names,
+                    )
+                except Exception as error:
+                    skipped_items.append(
+                        {
+                            "source_path": str(input_path),
+                            "reason": str(error),
+                        }
+                    )
+                    continue
+
+                source_manifests.append(source_manifest)
+                skipped_items.extend(source_manifest["skipped_items"])
+                JOBS[job_id]["processed_videos_count"] = len(source_manifests)
+                JOBS[job_id]["cut_outputs"].extend(
+                    output["path"] for output in source_manifest["cut_outputs"]
+                )
+                JOBS[job_id]["shorts_outputs"].extend(
+                    output["path"] for output in source_manifest["shorts_outputs"]
+                )
+
+            if not source_manifests:
+                raise RuntimeError("No videos were processed successfully")
+
+            manifest = {
+                "job_id": job_id,
+                "source_folder": str(folder_path),
+                "created_at": utc_now(),
+                "output_kind": payload.output_kind,
+                "cut_output_dir": (
+                    str(cut_output_dir) if payload.output_kind != "shorts_only" else None
+                ),
+                "shorts_output_dir": (
+                    str(shorts_output_dir) if payload.output_kind != "cut_only" else None
+                ),
+                "shorts_mode": payload.shorts_mode,
+                "shorts_quality": payload.shorts_quality,
+                "sources": source_manifests,
+                "skipped_items": skipped_items,
+            }
+            manifest_path = job_output_dir / "source_info.json"
+            write_json_file(manifest_path, manifest)
+
+            JOBS[job_id]["manifest_path"] = str(manifest_path)
+            JOBS[job_id]["skipped_clips_count"] = len(skipped_items)
+            JOBS[job_id]["status"] = "done"
+            set_job_progress(job_id, 100, "Batch cut finished")
+            JOBS[job_id]["finished_at"] = utc_now()
+
+        except Exception as error:
+            JOBS[job_id]["status"] = "failed"
+            JOBS[job_id]["error"] = str(error)
+            JOBS[job_id]["skipped_items"] = skipped_items
+            JOBS[job_id]["finished_at"] = utc_now()
+
+    background_tasks.add_task(task)
+
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "message": f"Batch cut started for {len(video_paths)} video files",
+        "video_count": len(video_paths),
+    }
+
+
 @app.post("/videos/detect-clips")
 def detect_clips_endpoint(payload: DetectClipsRequest):
     input_path = find_uploaded_video(payload.video_id)
@@ -893,6 +1030,12 @@ def generate_shorts_compilations_endpoint(
     if not clips:
         raise HTTPException(status_code=400, detail="No shorts clips were found")
 
+    divider_path = (
+        find_uploaded_video(payload.divider_video_id)
+        if payload.divider_video_id
+        else None
+    )
+
     job_id = str(uuid.uuid4())
     compilation_dir = OUTPUT_DIR / "compilations" / job_id
     compilation_dir.mkdir(parents=True, exist_ok=True)
@@ -909,6 +1052,9 @@ def generate_shorts_compilations_endpoint(
     def task():
         try:
             set_job_progress(job_id, 5, "Reading clip durations")
+            divider_duration = (
+                get_video_duration(divider_path) if divider_path is not None else 0.0
+            )
             eligible_clips, skipped_clips = collect_eligible_shorts_clips(
                 clips,
                 max_duration_seconds=payload.max_duration_seconds,
@@ -920,6 +1066,7 @@ def generate_shorts_compilations_endpoint(
                 max_duration_seconds=payload.max_duration_seconds,
                 min_clips_per_short=payload.min_clips_per_short,
                 max_shorts=payload.max_shorts,
+                divider_duration_seconds=divider_duration,
             )
             skipped_clips.extend(unused_clips)
 
@@ -930,6 +1077,17 @@ def generate_shorts_compilations_endpoint(
 
             shorts_dir = compilation_dir / "shorts"
             shorts_dir.mkdir(parents=True, exist_ok=True)
+            divider_concat_path = None
+
+            if divider_path is not None:
+                divider_concat_path = compilation_dir / "divider_normalized.mp4"
+                process_vertical_short(
+                    input_path=divider_path,
+                    output_path=divider_concat_path,
+                    mode="fit_padding",
+                    quality="high",
+                )
+
             manifest_shorts = []
             total_groups = len(groups)
 
@@ -966,6 +1124,24 @@ def generate_shorts_compilations_endpoint(
                         }
                     )
 
+                    if divider_concat_path is not None and clip_index < len(group["clips"]):
+                        divider_filename = f"{clip_index:03d}_divider.mp4"
+                        divider_output_path = selected_dir / divider_filename
+                        shutil.copy2(divider_concat_path, divider_output_path)
+                        selected_paths.append(divider_output_path)
+                        selected_manifest.append(
+                            {
+                                "order": f"{clip_index}.divider",
+                                "type": "divider",
+                                "source_video_id": payload.divider_video_id,
+                                "source_filename": divider_path.name,
+                                "source_path": str(divider_path),
+                                "selected_filename": divider_filename,
+                                "selected_path": str(divider_output_path),
+                                "duration_seconds": round(divider_duration, 3),
+                            }
+                        )
+
                 final_output = short_dir / "final.mp4"
                 concatenate_video_files(selected_paths, final_output)
                 JOBS[job_id]["final_outputs"].append(str(final_output))
@@ -990,6 +1166,8 @@ def generate_shorts_compilations_endpoint(
                     "max_duration_seconds": payload.max_duration_seconds,
                     "min_clips_per_short": payload.min_clips_per_short,
                     "max_shorts": payload.max_shorts,
+                    "divider_video_id": payload.divider_video_id,
+                    "divider_duration_seconds": round(divider_duration, 3),
                 },
                 "compilation_dir": str(compilation_dir),
                 "shorts_dir": str(shorts_dir),
@@ -1081,6 +1259,154 @@ def find_uploaded_video(video_id: str) -> Path:
         raise HTTPException(status_code=404, detail="Video not found")
 
     return matches[0]
+
+
+def find_video_files_in_folder(
+    folder_path: Path,
+    recursive: bool,
+    max_videos: int,
+) -> list[Path]:
+    candidates = folder_path.rglob("*") if recursive else folder_path.iterdir()
+    video_paths = [
+        path
+        for path in candidates
+        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
+    ]
+
+    return sorted(video_paths, key=lambda path: path.name.lower())[:max_videos]
+
+
+def process_batch_source_video(
+    input_path: Path,
+    cut_output_dir: Path,
+    shorts_output_dir: Path,
+    payload: BatchCutFolderRequest,
+    used_names: set[str],
+) -> dict:
+    source_name = sanitize_filename(input_path.stem, "video")
+    cuts = detect_scene_clips(
+        input_path=input_path,
+        threshold=payload.threshold,
+        min_clip_seconds=payload.min_clip_seconds,
+        end_trim_ms=payload.end_trim_ms,
+        remove_black_screens=payload.remove_black_screens,
+        black_min_duration_seconds=payload.black_min_duration_seconds,
+        black_pixel_threshold=payload.black_pixel_threshold,
+        black_picture_threshold=payload.black_picture_threshold,
+        black_trim_padding_ms=payload.black_trim_padding_ms,
+    )
+    black_ranges = (
+        detect_black_ranges(
+            input_path=input_path,
+            min_duration_seconds=payload.black_min_duration_seconds,
+            pixel_threshold=payload.black_pixel_threshold,
+            picture_threshold=payload.black_picture_threshold,
+            trim_padding_seconds=payload.black_trim_padding_ms / 1000,
+        )
+        if payload.remove_black_screens
+        else None
+    )
+
+    cut_outputs = []
+    shorts_outputs = []
+    skipped_items = []
+
+    with tempfile.TemporaryDirectory(prefix=f"{source_name}_batch_cuts_") as temp_dir:
+        temp_path = Path(temp_dir)
+
+        for cut_index, cut in enumerate(cuts, start=1):
+            cut_name = sanitize_filename(cut.get("name"), f"clip_{cut_index}")
+            output_name = make_unique_name(f"{source_name}_{cut_name}", used_names)
+            cut_output_path = (
+                cut_output_dir / f"{output_name}.mp4"
+                if payload.output_kind != "shorts_only"
+                else temp_path / f"{output_name}.mp4"
+            )
+
+            try:
+                if payload.remove_black_screens:
+                    cut_video_without_black_screens(
+                        input_path=input_path,
+                        output_path=cut_output_path,
+                        start=str(cut["start"]),
+                        end=str(cut["end"]),
+                        quality=payload.quality,
+                        black_ranges=black_ranges,
+                        black_min_duration_seconds=payload.black_min_duration_seconds,
+                        black_pixel_threshold=payload.black_pixel_threshold,
+                        black_picture_threshold=payload.black_picture_threshold,
+                        black_trim_padding_ms=payload.black_trim_padding_ms,
+                    )
+                elif payload.mode == "accurate":
+                    cut_video_accurate(
+                        input_path=input_path,
+                        output_path=cut_output_path,
+                        start=str(cut["start"]),
+                        end=str(cut["end"]),
+                        quality=payload.quality,
+                    )
+                else:
+                    cut_video_copy(
+                        input_path=input_path,
+                        output_path=cut_output_path,
+                        start=str(cut["start"]),
+                        end=str(cut["end"]),
+                    )
+
+                if payload.output_kind != "shorts_only":
+                    cut_outputs.append(
+                        {
+                            "filename": cut_output_path.name,
+                            "path": str(cut_output_path),
+                            "cut": cut,
+                        }
+                    )
+
+                if payload.output_kind != "cut_only":
+                    shorts_output_path = shorts_output_dir / f"{output_name}_short.mp4"
+                    process_vertical_short(
+                        input_path=cut_output_path,
+                        output_path=shorts_output_path,
+                        mode=payload.shorts_mode,
+                        quality=payload.shorts_quality,
+                    )
+                    shorts_outputs.append(
+                        {
+                            "filename": shorts_output_path.name,
+                            "path": str(shorts_output_path),
+                            "cut": cut,
+                            "raw_cut_filename": (
+                                cut_output_path.name
+                                if payload.output_kind != "shorts_only"
+                                else None
+                            ),
+                            "raw_cut_path": (
+                                str(cut_output_path)
+                                if payload.output_kind != "shorts_only"
+                                else None
+                            ),
+                        }
+                    )
+            except Exception as error:
+                skipped_items.append(
+                    {
+                        "source_path": str(input_path),
+                        "cut": cut,
+                        "reason": str(error),
+                    }
+                )
+
+    if not cut_outputs and not shorts_outputs:
+        raise RuntimeError("No clips were exported")
+
+    return {
+        "source_video": str(input_path),
+        "source_filename": input_path.name,
+        "cuts": cuts,
+        "cut_outputs": cut_outputs,
+        "shorts_outputs": shorts_outputs,
+        "skipped_items": skipped_items,
+    }
 
 
 def save_upload_with_hash(file: UploadFile, output_path: Path) -> str:
@@ -1354,6 +1680,7 @@ def build_random_shorts_groups(
     max_duration_seconds: int,
     min_clips_per_short: int,
     max_shorts: int,
+    divider_duration_seconds: float = 0.0,
 ) -> tuple[list[dict], list[dict]]:
     remaining_clips = clips[:]
     groups = []
@@ -1371,7 +1698,12 @@ def build_random_shorts_groups(
                 (
                     index
                     for index, clip in enumerate(remaining_clips)
-                    if group_duration + clip["duration_seconds"]
+                    if duration_with_added_clip(
+                        group_duration,
+                        len(group_clips),
+                        clip["duration_seconds"],
+                        divider_duration_seconds,
+                    )
                     <= max_duration_seconds
                 ),
                 None,
@@ -1382,7 +1714,12 @@ def build_random_shorts_groups(
 
             clip = remaining_clips.pop(fit_index)
             group_clips.append(clip)
-            group_duration += clip["duration_seconds"]
+            group_duration = duration_with_added_clip(
+                group_duration,
+                len(group_clips) - 1,
+                clip["duration_seconds"],
+                divider_duration_seconds,
+            )
 
         if (
             len(group_clips) >= min_clips_per_short
@@ -1406,6 +1743,18 @@ def build_random_shorts_groups(
     )
 
     return groups, unused_clips
+
+
+def duration_with_added_clip(
+    current_duration: float,
+    current_clip_count: int,
+    clip_duration: float,
+    divider_duration_seconds: float,
+) -> float:
+    divider_duration = max(0.0, divider_duration_seconds)
+    added_divider_duration = divider_duration if current_clip_count > 0 else 0.0
+
+    return current_duration + added_divider_duration + clip_duration
 
 
 def concatenate_video_files(input_paths: list[Path], output_path: Path) -> None:

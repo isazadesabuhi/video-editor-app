@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import BatchFolderCut from "@/components/BatchFolderCut";
 import CropEditor from "@/components/CropEditor";
 import CutListEditor from "@/components/CutListEditor";
 import JobStatusList from "@/components/JobStatusList";
@@ -379,6 +380,8 @@ export default function HomePage() {
           Upload the video to the backend before cutting or cropping.
         </p>
       )}
+
+      <BatchFolderCut onJobStarted={addJob} />
 
       {videoUrl && (
         <section className="space-y-4 rounded border p-4">
